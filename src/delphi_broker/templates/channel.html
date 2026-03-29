@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Delphi — {{ channel_name }}{% endblock %}
+{% block content %}
+<h1>Channel: {{ channel_name }}</h1>
+
+{% if messages %}
+  {% for msg in messages %}
+  <div class="card {% if msg.priority == 'urgent' %}card-urgent{% endif %}">
+    <div class="card-header">
+      <div>
+        <a href="/web/message/{{ msg.message_id }}"><strong>{{ msg.subject or '(no subject)' }}</strong></a>
+      </div>
+      <span class="badge badge-{{ msg.status | lower }}">{{ msg.status }}</span>
+    </div>
+    <div class="card-meta">
+      From <strong>{{ msg.sender }}</strong> &middot; {{ msg.submitted_at[:19] }}
+      {% if msg.recipients != '*' %} &middot; To: {{ msg.recipients }}{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+  <div class="empty">No messages in this channel.</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Delphi — Dashboard{% endblock %}
+{% block head %}<meta http-equiv="refresh" content="15">{% endblock %}
+{% block content %}
+<h1>Delphi Broker</h1>
+
+<div class="stats">
+  <div class="stat-card">
+    <div class="stat-value" style="color: var(--pending)">{{ pending_total }}</div>
+    <div class="stat-label">Pending</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="color: var(--approved)">{{ approved_total }}</div>
+    <div class="stat-label">Approved</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ channels | length }}</div>
+    <div class="stat-label">Channels</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ agents | length }}</div>
+    <div class="stat-label">Agents</div>
+  </div>
+</div>
+
+<h2>Active Channels</h2>
+{% if channels %}
+  {% for ch in channels %}
+  <div class="card">
+    <div class="card-header">
+      <a href="/web/channel/{{ ch.channel }}"><strong>{{ ch.channel }}</strong></a>
+      <div>
+        {% if ch.pending > 0 %}<span class="badge badge-pending">{{ ch.pending }} pending</span>{% endif %}
+        {% if ch.approved > 0 %}<span class="badge badge-approved">{{ ch.approved }} approved</span>{% endif %}
+        <span style="font-size:0.8rem;color:var(--text-muted)">{{ ch.total }} total</span>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+  <div class="empty">No channels yet. Messages create channels automatically.</div>
+{% endif %}
+{% endblock %}
