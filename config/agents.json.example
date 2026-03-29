@@ -1,0 +1,20 @@
+{
+  "$schema": "Seed agent registry. Agents listed here are auto-registered on startup.",
+  "agents": [
+    {
+      "agent_id": "host1-codex",
+      "host": "host1",
+      "roles": "worker"
+    },
+    {
+      "agent_id": "host1-claude",
+      "host": "host1",
+      "roles": "worker"
+    },
+    {
+      "agent_id": "host2-claude",
+      "host": "host2",
+      "roles": "worker,orchestrator"
+    }
+  ]
+}

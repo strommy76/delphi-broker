@@ -26,13 +26,17 @@ DELPHI_PORT=8420
 DELPHI_DB_PATH=delphi.db
 ```
 
-Agent registry lives in `config/agents.json`:
+Agent registry lives in `config/agents.json` (gitignored, copy from example):
+
+```bash
+cp config/agents.json.example config/agents.json  # then edit with your agents
+```
 
 ```json
 {
   "agents": [
-    {"agent_id": "dev-codex", "host": "desktop-vc94kou", "roles": "worker"},
-    {"agent_id": "bsflow-claude", "host": "bsflow", "roles": "worker,orchestrator"}
+    {"agent_id": "host1-codex", "host": "host1", "roles": "worker"},
+    {"agent_id": "host2-claude", "host": "host2", "roles": "worker,orchestrator"}
   ]
 }
 ```

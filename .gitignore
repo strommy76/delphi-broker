@@ -9,6 +9,7 @@ build/
 venv/
 env/
 .env
+config/agents.json
 *.db
 .claude/
 node_modules/
