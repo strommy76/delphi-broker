@@ -1,3 +1,5 @@
+name: delphi-broker
+
 services:
   broker:
     build: .

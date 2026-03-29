@@ -43,8 +43,10 @@ Agent registry lives in `config/agents.json`:
 
 ```bash
 cp .env.example .env  # adjust as needed
-docker compose up -d --build
+docker compose -p delphi-broker up -d --build
 ```
+
+> ⚠️ The `-p delphi-broker` flag isolates this stack from other compose projects (e.g., LexxAI) on the same host.
 
 Data persists in `./data/` (SQLite DB). Agent registry is mounted read-only from `./config/`.
 
