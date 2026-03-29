@@ -89,9 +89,7 @@ def touch_agent(conn: sqlite3.Connection, agent_id: str, host: str = "") -> None
     now = _now()
     cur = conn.execute("SELECT agent_id FROM agents WHERE agent_id = ?", (agent_id,))
     if cur.fetchone():
-        conn.execute(
-            "UPDATE agents SET last_seen = ? WHERE agent_id = ?", (now, agent_id)
-        )
+        conn.execute("UPDATE agents SET last_seen = ? WHERE agent_id = ?", (now, agent_id))
     else:
         conn.execute(
             """INSERT INTO agents (agent_id, host, roles, first_seen, last_seen)
@@ -102,9 +100,7 @@ def touch_agent(conn: sqlite3.Connection, agent_id: str, host: str = "") -> None
 
 
 def is_orchestrator(conn: sqlite3.Connection, agent_id: str) -> bool:
-    cur = conn.execute(
-        "SELECT roles FROM agents WHERE agent_id = ?", (agent_id,)
-    )
+    cur = conn.execute("SELECT roles FROM agents WHERE agent_id = ?", (agent_id,))
     row = cur.fetchone()
     if not row:
         return False
@@ -134,8 +130,18 @@ def submit_message(
             status, submitted_at, decided_at, decided_by, parent_id, metadata)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            message_id, channel, sender, recipients, subject, body, priority,
-            status, now, decided_at, decided_by, parent_id,
+            message_id,
+            channel,
+            sender,
+            recipients,
+            subject,
+            body,
+            priority,
+            status,
+            now,
+            decided_at,
+            decided_by,
+            parent_id,
             json.dumps(metadata or {}),
         ),
     )
@@ -145,9 +151,7 @@ def submit_message(
 
 
 def get_message(conn: sqlite3.Connection, message_id: str) -> Optional[dict]:
-    cur = conn.execute(
-        "SELECT * FROM messages WHERE message_id = ?", (message_id,)
-    )
+    cur = conn.execute("SELECT * FROM messages WHERE message_id = ?", (message_id,))
     row = cur.fetchone()
     if not row:
         return None
@@ -221,9 +225,7 @@ def reject_message(
     return get_message(conn, message_id)
 
 
-def ack_message(
-    conn: sqlite3.Connection, message_id: str, agent_id: str
-) -> Optional[dict]:
+def ack_message(conn: sqlite3.Connection, message_id: str, agent_id: str) -> Optional[dict]:
     msg = get_message(conn, message_id)
     if not msg or msg["status"] != "APPROVED":
         return None
@@ -244,15 +246,13 @@ def list_agents(conn: sqlite3.Connection) -> list[dict]:
 
 
 def list_channels(conn: sqlite3.Connection) -> list[dict]:
-    cur = conn.execute(
-        """SELECT channel,
+    cur = conn.execute("""SELECT channel,
                   COUNT(*) as total,
                   SUM(CASE WHEN status='PENDING' THEN 1 ELSE 0 END) as pending,
                   SUM(CASE WHEN status='APPROVED' THEN 1 ELSE 0 END) as approved,
                   SUM(CASE WHEN status='REJECTED' THEN 1 ELSE 0 END) as rejected,
                   SUM(CASE WHEN status='ACKED' THEN 1 ELSE 0 END) as acked
-           FROM messages GROUP BY channel ORDER BY MAX(submitted_at) DESC"""
-    )
+           FROM messages GROUP BY channel ORDER BY MAX(submitted_at) DESC""")
     return [dict(row) for row in cur.fetchall()]
 
 

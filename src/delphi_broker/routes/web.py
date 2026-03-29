@@ -53,7 +53,8 @@ def dashboard(request: Request):
         pending_total = sum(ch["pending"] for ch in channels)
         approved_total = sum(ch["approved"] for ch in channels)
         return _render(
-            request, "dashboard.html",
+            request,
+            "dashboard.html",
             channels=channels,
             agents=agents,
             pending_total=pending_total,

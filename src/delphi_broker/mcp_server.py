@@ -106,9 +106,7 @@ def delphi_pending(
     """
     conn = _conn()
     try:
-        messages = db.list_messages(
-            conn, status="PENDING", channel=channel or None, limit=limit
-        )
+        messages = db.list_messages(conn, status="PENDING", channel=channel or None, limit=limit)
         return {"count": len(messages), "messages": messages}
     finally:
         conn.close()

@@ -1,0 +1,13 @@
+services:
+  broker:
+    build: .
+    container_name: delphi-broker
+    env_file: .env
+    ports:
+      - "${DELPHI_PORT:-8420}:8420"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config:ro
+    environment:
+      - DELPHI_DB_PATH=/app/data/delphi.db
+    restart: always

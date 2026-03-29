@@ -42,7 +42,9 @@ def submit_message(payload: MessageSubmit):
 
 
 @router.get("/messages/inbox")
-def inbox(agent_id: str, channel: str = "", status: str = "APPROVED", since: str = "", limit: int = 50):
+def inbox(
+    agent_id: str, channel: str = "", status: str = "APPROVED", since: str = "", limit: int = 50
+):
     conn = _conn()
     try:
         db.touch_agent(conn, agent_id)

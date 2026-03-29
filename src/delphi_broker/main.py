@@ -42,6 +42,7 @@ app.mount("/mcp", mcp_app)
 
 def run():
     import uvicorn
+
     uvicorn.run(app, host=HOST, port=PORT)
 
 

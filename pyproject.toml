@@ -1,0 +1,32 @@
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+exclude = '''
+(
+  /venv/
+| /.venv/
+| /__pycache__/
+| /data/
+)
+'''
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [
+  "venv",
+  ".venv",
+  "__pycache__",
+  "data",
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+asyncio_mode = "auto"
+norecursedirs = [
+  "venv",
+  ".venv",
+  "__pycache__",
+  "data",
+  ".pytest_cache",
+]
