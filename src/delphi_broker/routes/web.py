@@ -105,7 +105,10 @@ def message_detail(request: Request, message_id: str):
         if not msg:
             return HTMLResponse("<h1>Not found</h1>", status_code=404)
         msg["body_html"] = _render_body(msg["body"])
-        return _render(request, "message_detail.html", msg=msg)
+        replies = db.list_replies(conn, message_id)
+        for reply in replies:
+            reply["body_html"] = _render_body(reply["body"])
+        return _render(request, "message_detail.html", msg=msg, replies=replies)
     finally:
         conn.close()
 
@@ -114,8 +117,22 @@ def message_detail(request: Request, message_id: str):
 def channel_view(request: Request, channel_name: str):
     conn = _conn()
     try:
-        messages = db.list_messages(conn, channel=channel_name, limit=100)
-        return _render(request, "channel.html", messages=messages, channel_name=channel_name)
+        messages = db.list_messages(conn, channel=channel_name, limit=200)
+        # Build threaded view: top-level messages with replies grouped underneath
+        by_id = {m["message_id"]: m for m in messages}
+        roots = []
+        for msg in messages:
+            msg["replies"] = []
+        for msg in messages:
+            pid = msg.get("parent_id")
+            if pid and pid in by_id:
+                by_id[pid]["replies"].append(msg)
+            else:
+                roots.append(msg)
+        # Sort roots newest-first, replies oldest-first (already sorted by submitted_at DESC from query)
+        for root in roots:
+            root["replies"].sort(key=lambda m: m["submitted_at"])
+        return _render(request, "channel.html", messages=roots, channel_name=channel_name)
     finally:
         conn.close()
 

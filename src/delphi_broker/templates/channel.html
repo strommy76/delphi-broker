@@ -9,6 +9,7 @@
     <div class="card-header">
       <div>
         <a href="/web/message/{{ msg.message_id }}"><strong>{{ msg.subject or '(no subject)' }}</strong></a>
+        {% if msg.replies %}<span class="reply-count">{{ msg.replies | length }} {{ 'reply' if msg.replies | length == 1 else 'replies' }}</span>{% endif %}
       </div>
       <span class="badge badge-{{ msg.status | lower }}">{{ msg.status }}</span>
     </div>
@@ -16,6 +17,25 @@
       From <strong>{{ msg.sender }}</strong> &middot; {{ msg.submitted_at[:19] }}
       {% if msg.recipients != '*' %} &middot; To: {{ msg.recipients }}{% endif %}
     </div>
+
+    {% if msg.replies %}
+    <div class="thread">
+      {% for reply in msg.replies %}
+      <div class="card reply-card {% if reply.priority == 'urgent' %}card-urgent{% endif %}">
+        <div class="card-header">
+          <div>
+            <a href="/web/message/{{ reply.message_id }}"><strong>{{ reply.subject or '(no subject)' }}</strong></a>
+          </div>
+          <span class="badge badge-{{ reply.status | lower }}">{{ reply.status }}</span>
+        </div>
+        <div class="card-meta">
+          From <strong>{{ reply.sender }}</strong> &middot; {{ reply.submitted_at[:19] }}
+          {% if reply.recipients != '*' %} &middot; To: {{ reply.recipients }}{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
   </div>
   {% endfor %}
 {% else %}

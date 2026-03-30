@@ -45,6 +45,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel);
 CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
 CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender);
 CREATE INDEX IF NOT EXISTS idx_messages_submitted_at ON messages(submitted_at);
+CREATE INDEX IF NOT EXISTS idx_messages_parent_id ON messages(parent_id);
 """
 
 
@@ -238,6 +239,14 @@ def ack_message(conn: sqlite3.Connection, message_id: str, agent_id: str) -> Opt
     conn.commit()
     touch_agent(conn, agent_id)
     return get_message(conn, message_id)
+
+
+def list_replies(conn: sqlite3.Connection, parent_id: str) -> list[dict]:
+    cur = conn.execute(
+        "SELECT * FROM messages WHERE parent_id = ? ORDER BY submitted_at ASC",
+        (parent_id,),
+    )
+    return [_row_to_dict(row) for row in cur.fetchall()]
 
 
 def list_agents(conn: sqlite3.Connection) -> list[dict]:

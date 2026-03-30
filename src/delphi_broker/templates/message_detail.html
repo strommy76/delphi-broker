@@ -35,4 +35,24 @@
 {% if msg.parent_id %}
 <p><a href="/web/message/{{ msg.parent_id }}">&larr; Parent message</a></p>
 {% endif %}
+
+{% if replies %}
+<h2>Replies ({{ replies | length }})</h2>
+{% for reply in replies %}
+<div class="card reply-card {% if reply.priority == 'urgent' %}card-urgent{% endif %}">
+  <div class="card-header">
+    <div>
+      <a href="/web/message/{{ reply.message_id }}"><strong>{{ reply.subject or '(no subject)' }}</strong></a>
+    </div>
+    <span class="badge badge-{{ reply.status | lower }}">{{ reply.status }}</span>
+  </div>
+  <div class="card-meta">
+    From <strong>{{ reply.sender }}</strong> &middot; {{ reply.submitted_at[:19] }}
+    {% if reply.recipients != '*' %} &middot; To: {{ reply.recipients }}{% endif %}
+    {% if reply.decided_by %} &middot; {{ reply.status }} by {{ reply.decided_by }}{% endif %}
+  </div>
+  <div class="card-body">{{ reply.body_html | safe }}</div>
+</div>
+{% endfor %}
+{% endif %}
 {% endblock %}
