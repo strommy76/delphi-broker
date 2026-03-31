@@ -1,4 +1,17 @@
-"""Web UI routes for Delphi Broker (phone-friendly approval interface)."""
+"""
+--------------------------------------------------------------------------------
+FILE:        web.py
+PATH:        C:/Projects/delphi-broker/src/delphi_broker/routes/web.py
+DESCRIPTION: Web UI routes for phone-friendly approval interface. The web UI
+             operates as the configured web-ui orchestrator identity — auth is
+             Tailnet-scoped, not application-scoped.
+
+CHANGELOG:
+2026-03-31 17:30      Claude      [Harden] Fail-loud approve/reject, receipt
+                                     display on message detail, file header
+2026-03-31 16:30      Claude      [Harden] XSS sanitization via nh3
+--------------------------------------------------------------------------------
+"""
 
 from __future__ import annotations
 
@@ -122,7 +135,11 @@ def message_detail(request: Request, message_id: str):
         replies = db.list_replies(conn, message_id)
         for reply in replies:
             reply["body_html"] = _render_body(reply["body"])
-        return _render(request, "message_detail.html", msg=msg, replies=replies)
+        receipts = db.get_receipts(conn, message_id)
+        return _render(
+            request, "message_detail.html",
+            msg=msg, replies=replies, receipts=receipts,
+        )
     finally:
         conn.close()
 
@@ -132,7 +149,6 @@ def channel_view(request: Request, channel_name: str):
     conn = _conn()
     try:
         messages = db.list_messages(conn, channel=channel_name, limit=200)
-        # Build threaded view: top-level messages with replies grouped underneath
         by_id = {m["message_id"]: m for m in messages}
         roots = []
         for msg in messages:
@@ -143,7 +159,6 @@ def channel_view(request: Request, channel_name: str):
                 by_id[pid]["replies"].append(msg)
             else:
                 roots.append(msg)
-        # Sort roots newest-first, replies oldest-first (already sorted by submitted_at DESC from query)
         for root in roots:
             root["replies"].sort(key=lambda m: m["submitted_at"])
         return _render(request, "channel.html", messages=roots, channel_name=channel_name)

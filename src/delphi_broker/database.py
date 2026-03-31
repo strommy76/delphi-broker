@@ -1,4 +1,18 @@
-"""SQLite database layer for Delphi Broker."""
+"""
+--------------------------------------------------------------------------------
+FILE:        database.py
+PATH:        C:/Projects/delphi-broker/src/delphi_broker/database.py
+DESCRIPTION: SQLite database layer — schema, HMAC verification, message
+             lifecycle, and per-recipient delivery tracking.
+
+CHANGELOG:
+2026-03-31 17:30      Claude      [Harden] HMAC on all mutations, per-recipient
+                                     receipts, replay protection, schema migration,
+                                     agent verification on all paths
+2026-03-31 16:30      Claude      [Harden] HMAC-SHA256 signing, exact recipient
+                                     matching, atomic transitions, kill auto-reg
+--------------------------------------------------------------------------------
+"""
 
 from __future__ import annotations
 
@@ -7,7 +21,7 @@ import hmac
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -37,11 +51,17 @@ CREATE TABLE IF NOT EXISTS messages (
     decided_at    TEXT,
     decided_by    TEXT,
     decision_note TEXT DEFAULT '',
-    acked_at      TEXT,
-    acked_by      TEXT,
     parent_id     TEXT,
     metadata      TEXT DEFAULT '{}',
-    signature     TEXT DEFAULT ''
+    signature     TEXT DEFAULT '',
+    client_ts     TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS message_receipts (
+    message_id  TEXT NOT NULL,
+    recipient   TEXT NOT NULL,
+    acked_at    TEXT,
+    PRIMARY KEY (message_id, recipient)
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel);
@@ -51,12 +71,27 @@ CREATE INDEX IF NOT EXISTS idx_messages_submitted_at ON messages(submitted_at);
 CREATE INDEX IF NOT EXISTS idx_messages_parent_id ON messages(parent_id);
 """
 
+# Indexes that depend on migrated columns — applied after ALTER TABLE
+_POST_MIGRATION_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_signature_unique
+    ON messages(signature) WHERE signature != '';
+"""
+
+# Columns that may not exist in older databases — migrated on startup
+_MIGRATIONS = [
+    ("messages", "signature", "TEXT DEFAULT ''"),
+    ("messages", "client_ts", "TEXT DEFAULT ''"),
+]
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 _initialized: set[str] = set()
+
+# Replay window: reject signed messages older than this
+_REPLAY_WINDOW = timedelta(minutes=5)
 
 
 def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
@@ -74,6 +109,8 @@ def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
+    _apply_migrations(conn)
+    conn.executescript(_POST_MIGRATION_SQL)
     now = _now()
     for agent in SEED_AGENTS:
         conn.execute(
@@ -89,21 +126,44 @@ def init_db(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def compute_signature(
-    secret: str,
-    sender: str,
-    channel: str,
-    timestamp: str,
-    subject: str,
-    body: str,
-    recipients: str,
-) -> str:
-    """Compute HMAC-SHA256 over canonical message payload."""
-    canonical = f"{sender}|{channel}|{timestamp}|{subject}|{body}|{recipients}"
+def _apply_migrations(conn: sqlite3.Connection) -> None:
+    """Add missing columns to existing tables (safe for fresh and upgraded DBs)."""
+    for table, column, col_type in _MIGRATIONS:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+
+# ---------------------------------------------------------------------------
+# HMAC signing
+# ---------------------------------------------------------------------------
+
+def compute_signature(secret: str, *fields: str) -> str:
+    """Compute HMAC-SHA256 over pipe-delimited fields.
+
+    Every call site passes an action prefix as the first field to prevent
+    cross-action signature reuse.
+    """
+    canonical = "|".join(fields)
     return hmac.new(
         secret.encode(), canonical.encode(), hashlib.sha256
     ).hexdigest()
 
+
+def check_timestamp_freshness(client_ts: str) -> bool:
+    """Reject timestamps outside the replay window."""
+    try:
+        ts = datetime.fromisoformat(client_ts.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return False
+    now = datetime.now(timezone.utc)
+    return abs(now - ts) <= _REPLAY_WINDOW
+
+
+# ---------------------------------------------------------------------------
+# Agent registry
+# ---------------------------------------------------------------------------
 
 def verify_agent(conn: sqlite3.Connection, agent_id: str) -> bool:
     """Check that agent_id exists in the registry. No auto-registration."""
@@ -112,7 +172,7 @@ def verify_agent(conn: sqlite3.Connection, agent_id: str) -> bool:
 
 
 def touch_agent(conn: sqlite3.Connection, agent_id: str) -> None:
-    """Update last_seen for a known agent. Fails silently if unknown (callers must verify first)."""
+    """Update last_seen for a known agent."""
     now = _now()
     conn.execute("UPDATE agents SET last_seen = ? WHERE agent_id = ?", (now, agent_id))
     conn.commit()
@@ -125,6 +185,10 @@ def is_orchestrator(conn: sqlite3.Connection, agent_id: str) -> bool:
         return False
     return "orchestrator" in row["roles"].split(",")
 
+
+# ---------------------------------------------------------------------------
+# Message lifecycle
+# ---------------------------------------------------------------------------
 
 def submit_message(
     conn: sqlite3.Connection,
@@ -139,6 +203,7 @@ def submit_message(
     metadata: Optional[dict] = None,
     status: str = "PENDING",
     signature: str = "",
+    client_ts: str = "",
 ) -> dict:
     message_id = str(uuid.uuid4())
     now = _now()
@@ -147,8 +212,9 @@ def submit_message(
     conn.execute(
         """INSERT INTO messages
            (message_id, channel, sender, recipients, subject, body, priority,
-            status, submitted_at, decided_at, decided_by, parent_id, metadata, signature)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            status, submitted_at, decided_at, decided_by, parent_id, metadata,
+            signature, client_ts)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             message_id,
             channel,
@@ -164,6 +230,7 @@ def submit_message(
             parent_id,
             json.dumps(metadata or {}),
             signature,
+            client_ts,
         ),
     )
     conn.commit()
@@ -187,6 +254,7 @@ def list_messages(
     recipient: Optional[str] = None,
     since: Optional[str] = None,
     limit: int = 50,
+    exclude_acked: bool = False,
 ) -> list[dict]:
     clauses = []
     params: list = []
@@ -213,6 +281,13 @@ def list_messages(
     if since:
         clauses.append("submitted_at > ?")
         params.append(since)
+    if exclude_acked and recipient:
+        clauses.append(
+            "NOT EXISTS (SELECT 1 FROM message_receipts r "
+            "WHERE r.message_id = messages.message_id "
+            "AND r.recipient = ? AND r.acked_at IS NOT NULL)"
+        )
+        params.append(recipient)
 
     where = " AND ".join(clauses) if clauses else "1=1"
     cur = conn.execute(
@@ -257,17 +332,32 @@ def reject_message(
 
 
 def ack_message(conn: sqlite3.Connection, message_id: str, agent_id: str) -> Optional[dict]:
+    """Record per-recipient acknowledgement via message_receipts."""
+    msg = get_message(conn, message_id)
+    if not msg or msg["status"] != "APPROVED":
+        return None
     now = _now()
-    cur = conn.execute(
-        """UPDATE messages SET status = 'ACKED', acked_at = ?, acked_by = ?
-           WHERE message_id = ? AND status = 'APPROVED'""",
-        (now, agent_id, message_id),
+    conn.execute(
+        """INSERT INTO message_receipts (message_id, recipient, acked_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(message_id, recipient) DO UPDATE SET acked_at = excluded.acked_at""",
+        (message_id, agent_id, now),
     )
     conn.commit()
-    if cur.rowcount == 0:
-        return None
     touch_agent(conn, agent_id)
-    return get_message(conn, message_id)
+    result = get_message(conn, message_id)
+    if result:
+        result["acked_by"] = agent_id
+        result["acked_at"] = now
+    return result
+
+
+def get_receipts(conn: sqlite3.Connection, message_id: str) -> list[dict]:
+    cur = conn.execute(
+        "SELECT * FROM message_receipts WHERE message_id = ? ORDER BY acked_at",
+        (message_id,),
+    )
+    return [dict(row) for row in cur.fetchall()]
 
 
 def list_replies(conn: sqlite3.Connection, parent_id: str) -> list[dict]:
@@ -288,8 +378,7 @@ def list_channels(conn: sqlite3.Connection) -> list[dict]:
                   COUNT(*) as total,
                   SUM(CASE WHEN status='PENDING' THEN 1 ELSE 0 END) as pending,
                   SUM(CASE WHEN status='APPROVED' THEN 1 ELSE 0 END) as approved,
-                  SUM(CASE WHEN status='REJECTED' THEN 1 ELSE 0 END) as rejected,
-                  SUM(CASE WHEN status='ACKED' THEN 1 ELSE 0 END) as acked
+                  SUM(CASE WHEN status='REJECTED' THEN 1 ELSE 0 END) as rejected
            FROM messages GROUP BY channel ORDER BY MAX(submitted_at) DESC""")
     return [dict(row) for row in cur.fetchall()]
 

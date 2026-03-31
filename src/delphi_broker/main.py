@@ -1,4 +1,14 @@
-"""Delphi Broker — MCP message broker with approval-gated routing."""
+"""
+--------------------------------------------------------------------------------
+FILE:        main.py
+PATH:        C:/Projects/delphi-broker/src/delphi_broker/main.py
+DESCRIPTION: FastAPI application entrypoint — mounts REST, MCP, and Web UI
+             surfaces with shared SQLite backend.
+
+CHANGELOG:
+2026-03-31 17:30      Claude      [Header] Add file header
+--------------------------------------------------------------------------------
+"""
 
 from __future__ import annotations
 
@@ -23,7 +33,7 @@ async def lifespan(application: FastAPI):
     yield
 
 
-app = FastAPI(title="Delphi Broker", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Delphi Broker", version="0.2.0", lifespan=lifespan)
 
 # Mount static files
 _static_dir = Path(__file__).resolve().parent / "static"

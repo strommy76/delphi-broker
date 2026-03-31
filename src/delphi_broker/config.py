@@ -1,8 +1,15 @@
-"""Delphi Broker configuration.
+"""
+--------------------------------------------------------------------------------
+FILE:        config.py
+PATH:        C:/Projects/delphi-broker/src/delphi_broker/config.py
+DESCRIPTION: Single import point for all configuration. Infrastructure from
+             .env, agent registry from config/agents.json. Fail-loud on
+             missing or invalid configuration.
 
-SSOT: Infrastructure config comes from .env (or environment).
-      Agent registry comes from config/agents.json.
-      This module is the single import point for all configuration.
+CHANGELOG:
+2026-03-31 17:30      Claude      [Header] Add file header
+2026-03-31 16:30      Claude      [Harden] Fail-loud config, AGENT_SECRETS lookup
+--------------------------------------------------------------------------------
 """
 
 from __future__ import annotations

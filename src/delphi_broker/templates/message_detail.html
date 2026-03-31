@@ -17,7 +17,6 @@
     {% if msg.recipients != '*' %} &middot; To: {{ msg.recipients }}{% endif %}
     {% if msg.decided_by %} &middot; {{ msg.status }} by {{ msg.decided_by }} at {{ msg.decided_at[:19] }}{% endif %}
     {% if msg.decision_note %} &middot; Note: {{ msg.decision_note }}{% endif %}
-    {% if msg.acked_by %} &middot; Acked by {{ msg.acked_by }} at {{ msg.acked_at[:19] }}{% endif %}
   </div>
   <div class="card-body-full">{{ msg.body_html | safe }}</div>
 
@@ -29,6 +28,18 @@
       <button type="submit" class="btn btn-reject" formaction="/web/pending/{{ msg.message_id }}/reject" formmethod="post">Reject</button>
     </div>
   </form>
+  {% endif %}
+
+  {% if receipts %}
+  <div class="receipts">
+    <h3>Acknowledgements ({{ receipts | length }})</h3>
+    {% for r in receipts %}
+    <div class="receipt-row">
+      <span><strong>{{ r.recipient }}</strong></span>
+      <span>{% if r.acked_at %}{{ r.acked_at[:19] }}{% else %}pending{% endif %}</span>
+    </div>
+    {% endfor %}
+  </div>
   {% endif %}
 </div>
 
