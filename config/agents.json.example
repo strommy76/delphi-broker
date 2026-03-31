@@ -4,17 +4,20 @@
     {
       "agent_id": "host1-codex",
       "host": "host1",
-      "roles": "worker"
+      "roles": "worker",
+      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
     },
     {
       "agent_id": "host1-claude",
       "host": "host1",
-      "roles": "worker"
+      "roles": "worker",
+      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
     },
     {
       "agent_id": "host2-claude",
       "host": "host2",
-      "roles": "worker,orchestrator"
+      "roles": "worker,orchestrator",
+      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
     }
   ]
 }

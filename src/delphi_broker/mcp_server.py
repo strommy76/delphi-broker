@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import hmac
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
 from . import database as db
-from .config import DB_PATH
+from .config import AGENT_SECRETS, DB_PATH
 
 mcp = FastMCP("delphi-broker")
 
@@ -21,6 +22,8 @@ def delphi_submit(
     sender: str,
     channel: str,
     body: str,
+    timestamp: str,
+    signature: str,
     subject: str = "",
     recipients: str = "*",
     priority: str = "normal",
@@ -32,10 +35,19 @@ def delphi_submit(
     recipients can see them. Use this to send findings, prompt drafts,
     gate checkpoints, code diffs, or reviews to other agents.
 
+    Messages must be signed with your agent secret:
+      canonical = "sender|channel|timestamp|subject|body|recipients"
+      signature = HMAC-SHA256(secret, canonical)
+
+    Compute via bash:
+      echo -n "CANONICAL" | openssl dgst -sha256 -hmac "SECRET" | awk '{print $2}'
+
     Args:
         sender: Your agent ID (e.g. 'dev-codex', 'prod-codex')
         channel: Target channel (e.g. '276-gate-h', '276-phase-1')
         body: Full message content. Markdown supported. Can be large.
+        timestamp: ISO 8601 timestamp of message creation
+        signature: HMAC-SHA256 signature over canonical payload
         subject: Short summary line
         recipients: Comma-separated agent_ids, or '*' for all
         priority: 'normal' or 'urgent'
@@ -43,6 +55,20 @@ def delphi_submit(
     """
     conn = _conn()
     try:
+        # Verify agent is registered
+        if not db.verify_agent(conn, sender):
+            return {"error": f"Unknown agent '{sender}' — not in registry"}
+
+        # Verify HMAC signature
+        secret = AGENT_SECRETS.get(sender)
+        if not secret:
+            return {"error": f"No secret configured for agent '{sender}'"}
+        expected = db.compute_signature(
+            secret, sender, channel, timestamp, subject, body, recipients
+        )
+        if not hmac.compare_digest(signature, expected):
+            return {"error": "Invalid signature — message rejected"}
+
         return db.submit_message(
             conn,
             sender=sender,
@@ -52,6 +78,7 @@ def delphi_submit(
             recipients=recipients,
             priority=priority,
             parent_id=parent_id,
+            signature=signature,
         )
     finally:
         conn.close()
@@ -79,6 +106,8 @@ def delphi_inbox(
     """
     conn = _conn()
     try:
+        if not db.verify_agent(conn, agent_id):
+            return {"error": f"Unknown agent '{agent_id}' — not in registry"}
         db.touch_agent(conn, agent_id)
         messages = db.list_messages(
             conn,
@@ -127,6 +156,8 @@ def delphi_ack(
     """
     conn = _conn()
     try:
+        if not db.verify_agent(conn, agent_id):
+            return {"error": f"Unknown agent '{agent_id}' — not in registry"}
         result = db.ack_message(conn, message_id, agent_id)
         if not result:
             return {"error": "Message not found or not in APPROVED status"}

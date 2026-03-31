@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import sqlite3
 import uuid
@@ -9,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from .config import DB_PATH, SEED_AGENTS, WEB_UI_AGENT_ID, WEB_UI_ROLES
+from .config import AGENT_SECRETS, DB_PATH, SEED_AGENTS, WEB_UI_AGENT_ID, WEB_UI_ROLES
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS agents (
@@ -38,7 +40,8 @@ CREATE TABLE IF NOT EXISTS messages (
     acked_at      TEXT,
     acked_by      TEXT,
     parent_id     TEXT,
-    metadata      TEXT DEFAULT '{}'
+    metadata      TEXT DEFAULT '{}',
+    signature     TEXT DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel);
@@ -86,17 +89,32 @@ def init_db(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def touch_agent(conn: sqlite3.Connection, agent_id: str, host: str = "") -> None:
-    now = _now()
+def compute_signature(
+    secret: str,
+    sender: str,
+    channel: str,
+    timestamp: str,
+    subject: str,
+    body: str,
+    recipients: str,
+) -> str:
+    """Compute HMAC-SHA256 over canonical message payload."""
+    canonical = f"{sender}|{channel}|{timestamp}|{subject}|{body}|{recipients}"
+    return hmac.new(
+        secret.encode(), canonical.encode(), hashlib.sha256
+    ).hexdigest()
+
+
+def verify_agent(conn: sqlite3.Connection, agent_id: str) -> bool:
+    """Check that agent_id exists in the registry. No auto-registration."""
     cur = conn.execute("SELECT agent_id FROM agents WHERE agent_id = ?", (agent_id,))
-    if cur.fetchone():
-        conn.execute("UPDATE agents SET last_seen = ? WHERE agent_id = ?", (now, agent_id))
-    else:
-        conn.execute(
-            """INSERT INTO agents (agent_id, host, roles, first_seen, last_seen)
-               VALUES (?, ?, ?, ?, ?)""",
-            (agent_id, host or "unknown", "worker", now, now),
-        )
+    return cur.fetchone() is not None
+
+
+def touch_agent(conn: sqlite3.Connection, agent_id: str) -> None:
+    """Update last_seen for a known agent. Fails silently if unknown (callers must verify first)."""
+    now = _now()
+    conn.execute("UPDATE agents SET last_seen = ? WHERE agent_id = ?", (now, agent_id))
     conn.commit()
 
 
@@ -120,6 +138,7 @@ def submit_message(
     parent_id: Optional[str] = None,
     metadata: Optional[dict] = None,
     status: str = "PENDING",
+    signature: str = "",
 ) -> dict:
     message_id = str(uuid.uuid4())
     now = _now()
@@ -128,8 +147,8 @@ def submit_message(
     conn.execute(
         """INSERT INTO messages
            (message_id, channel, sender, recipients, subject, body, priority,
-            status, submitted_at, decided_at, decided_by, parent_id, metadata)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            status, submitted_at, decided_at, decided_by, parent_id, metadata, signature)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             message_id,
             channel,
@@ -144,6 +163,7 @@ def submit_message(
             decided_by,
             parent_id,
             json.dumps(metadata or {}),
+            signature,
         ),
     )
     conn.commit()
@@ -178,8 +198,18 @@ def list_messages(
         clauses.append("channel = ?")
         params.append(channel)
     if recipient:
-        clauses.append("(recipients = '*' OR recipients LIKE ?)")
-        params.append(f"%{recipient}%")
+        clauses.append(
+            "(recipients = '*' OR recipients = ? "
+            "OR recipients LIKE ? "
+            "OR recipients LIKE ? "
+            "OR recipients LIKE ?)"
+        )
+        params.extend([
+            recipient,            # exact single recipient
+            f"{recipient},%",     # first in list
+            f"%,{recipient},%",   # middle of list
+            f"%,{recipient}",     # last in list
+        ])
     if since:
         clauses.append("submitted_at > ?")
         params.append(since)
@@ -195,16 +225,16 @@ def list_messages(
 def approve_message(
     conn: sqlite3.Connection, message_id: str, agent_id: str, note: str = ""
 ) -> Optional[dict]:
-    msg = get_message(conn, message_id)
-    if not msg or msg["status"] != "PENDING":
-        return None
     now = _now()
-    conn.execute(
+    cur = conn.execute(
         """UPDATE messages SET status = 'APPROVED', decided_at = ?,
-           decided_by = ?, decision_note = ? WHERE message_id = ?""",
+           decided_by = ?, decision_note = ?
+           WHERE message_id = ? AND status = 'PENDING'""",
         (now, agent_id, note, message_id),
     )
     conn.commit()
+    if cur.rowcount == 0:
+        return None
     touch_agent(conn, agent_id)
     return get_message(conn, message_id)
 
@@ -212,31 +242,30 @@ def approve_message(
 def reject_message(
     conn: sqlite3.Connection, message_id: str, agent_id: str, reason: str = ""
 ) -> Optional[dict]:
-    msg = get_message(conn, message_id)
-    if not msg or msg["status"] != "PENDING":
-        return None
     now = _now()
-    conn.execute(
+    cur = conn.execute(
         """UPDATE messages SET status = 'REJECTED', decided_at = ?,
-           decided_by = ?, decision_note = ? WHERE message_id = ?""",
+           decided_by = ?, decision_note = ?
+           WHERE message_id = ? AND status = 'PENDING'""",
         (now, agent_id, reason, message_id),
     )
     conn.commit()
+    if cur.rowcount == 0:
+        return None
     touch_agent(conn, agent_id)
     return get_message(conn, message_id)
 
 
 def ack_message(conn: sqlite3.Connection, message_id: str, agent_id: str) -> Optional[dict]:
-    msg = get_message(conn, message_id)
-    if not msg or msg["status"] != "APPROVED":
-        return None
     now = _now()
-    conn.execute(
+    cur = conn.execute(
         """UPDATE messages SET status = 'ACKED', acked_at = ?, acked_by = ?
-           WHERE message_id = ?""",
+           WHERE message_id = ? AND status = 'APPROVED'""",
         (now, agent_id, message_id),
     )
     conn.commit()
+    if cur.rowcount == 0:
+        return None
     touch_agent(conn, agent_id)
     return get_message(conn, message_id)
 

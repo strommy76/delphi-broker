@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import markdown
+import nh3
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -26,7 +27,8 @@ def _conn():
 
 def _render_body(body: str) -> str:
     _md.reset()
-    return _md.convert(body)
+    raw_html = _md.convert(body)
+    return nh3.clean(raw_html)
 
 
 def _pending_count() -> int:
@@ -81,9 +83,15 @@ def pending_list(request: Request):
 def approve_from_web(message_id: str, note: str = Form("")):
     conn = _conn()
     try:
-        db.approve_message(conn, message_id, WEB_UI_AGENT_ID, note)
+        result = db.approve_message(conn, message_id, WEB_UI_AGENT_ID, note)
     finally:
         conn.close()
+    if not result:
+        return HTMLResponse(
+            "<h1>Failed</h1><p>Message not found or not PENDING.</p>"
+            '<p><a href="/web/pending">Back</a></p>',
+            status_code=409,
+        )
     return RedirectResponse("/web/pending", status_code=303)
 
 
@@ -91,9 +99,15 @@ def approve_from_web(message_id: str, note: str = Form("")):
 def reject_from_web(message_id: str, note: str = Form("")):
     conn = _conn()
     try:
-        db.reject_message(conn, message_id, WEB_UI_AGENT_ID, note)
+        result = db.reject_message(conn, message_id, WEB_UI_AGENT_ID, note)
     finally:
         conn.close()
+    if not result:
+        return HTMLResponse(
+            "<h1>Failed</h1><p>Message not found or not PENDING.</p>"
+            '<p><a href="/web/pending">Back</a></p>',
+            status_code=409,
+        )
     return RedirectResponse("/web/pending", status_code=303)
 
 

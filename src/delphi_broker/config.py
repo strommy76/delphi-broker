@@ -45,8 +45,22 @@ WEB_UI_ROLES: str = os.environ.get("DELPHI_WEB_UI_ROLES", "orchestrator")
 # Agent registry (from config/agents.json)
 # ---------------------------------------------------------------------------
 _agents_file = _PROJECT_ROOT / "config" / "agents.json"
-if _agents_file.exists():
-    _agents_data = json.loads(_agents_file.read_text())
-    SEED_AGENTS: list[dict] = _agents_data.get("agents", [])
-else:
-    SEED_AGENTS = []
+if not _agents_file.exists():
+    raise FileNotFoundError(
+        f"Agent registry not found: {_agents_file}. "
+        "Copy config/agents.json.example to config/agents.json and configure."
+    )
+
+_agents_data = json.loads(_agents_file.read_text())
+SEED_AGENTS: list[dict] = _agents_data.get("agents", [])
+
+# HMAC secret lookup: agent_id -> secret (for message signature verification)
+AGENT_SECRETS: dict[str, str] = {}
+for _agent in SEED_AGENTS:
+    _secret = _agent.get("secret", "")
+    if not _secret or _secret.startswith("GENERATE_WITH"):
+        raise ValueError(
+            f"Agent '{_agent['agent_id']}' has no valid secret in {_agents_file}. "
+            "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+        )
+    AGENT_SECRETS[_agent["agent_id"]] = _secret

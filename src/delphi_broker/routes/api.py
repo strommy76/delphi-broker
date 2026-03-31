@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hmac as hmac_mod
+
 from fastapi import APIRouter, HTTPException
 
 from .. import database as db
-from ..config import DB_PATH
+from ..config import AGENT_SECRETS, DB_PATH
 from ..models import (
     BroadcastSubmit,
     MessageAck,
@@ -25,6 +27,23 @@ def _conn():
 def submit_message(payload: MessageSubmit):
     conn = _conn()
     try:
+        # Verify agent is registered
+        if not db.verify_agent(conn, payload.sender):
+            raise HTTPException(403, f"Unknown agent '{payload.sender}' — not in registry")
+
+        # Verify HMAC signature
+        secret = AGENT_SECRETS.get(payload.sender)
+        if not secret:
+            raise HTTPException(403, f"No secret configured for agent '{payload.sender}'")
+        if not payload.signature or not payload.timestamp:
+            raise HTTPException(400, "Missing required fields: timestamp and signature")
+        expected = db.compute_signature(
+            secret, payload.sender, payload.channel, payload.timestamp,
+            payload.subject, payload.body, payload.recipients,
+        )
+        if not hmac_mod.compare_digest(payload.signature, expected):
+            raise HTTPException(403, "Invalid signature — message rejected")
+
         result = db.submit_message(
             conn,
             sender=payload.sender,
@@ -35,6 +54,7 @@ def submit_message(payload: MessageSubmit):
             priority=payload.priority,
             parent_id=payload.parent_id,
             metadata=payload.metadata,
+            signature=payload.signature,
         )
         return result
     finally:
@@ -47,6 +67,8 @@ def inbox(
 ):
     conn = _conn()
     try:
+        if not db.verify_agent(conn, agent_id):
+            raise HTTPException(403, f"Unknown agent '{agent_id}' — not in registry")
         db.touch_agent(conn, agent_id)
         return db.list_messages(
             conn,

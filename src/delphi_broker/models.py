@@ -16,6 +16,8 @@ class MessageSubmit(BaseModel):
     priority: str = "normal"
     parent_id: Optional[str] = None
     metadata: dict = Field(default_factory=dict)
+    timestamp: str = ""
+    signature: str = ""
 
 
 class MessageDecision(BaseModel):
@@ -58,6 +60,7 @@ class MessageOut(BaseModel):
     acked_by: Optional[str] = None
     parent_id: Optional[str] = None
     metadata: dict = Field(default_factory=dict)
+    signature: Optional[str] = None
 
 
 class AgentOut(BaseModel):
