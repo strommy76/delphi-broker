@@ -25,7 +25,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
-from .config import AGENT_SECRETS, DB_PATH, SEED_AGENTS, WEB_UI_AGENT_ID, WEB_UI_ROLES
+from .config import DB_PATH, SEED_AGENTS, WEB_UI_AGENT_ID, WEB_UI_ROLES
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS agents (
@@ -139,6 +139,20 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
 # HMAC signing
 # ---------------------------------------------------------------------------
 
+
+def canonical_metadata_json(metadata: Optional[dict]) -> str:
+    """Serialize metadata deterministically for signature and persistence."""
+    return json.dumps(metadata or {}, sort_keys=True, separators=(",", ":"))
+
+
+def _optional_text(value: Optional[str]) -> str:
+    return value or ""
+
+
+def _bool_text(value: bool) -> str:
+    return "true" if value else "false"
+
+
 def compute_signature(secret: str, *fields: str) -> str:
     """Compute HMAC-SHA256 over pipe-delimited fields.
 
@@ -146,9 +160,7 @@ def compute_signature(secret: str, *fields: str) -> str:
     cross-action signature reuse.
     """
     canonical = "|".join(fields)
-    return hmac.new(
-        secret.encode(), canonical.encode(), hashlib.sha256
-    ).hexdigest()
+    return hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
 
 
 def check_timestamp_freshness(client_ts: str) -> bool:
@@ -161,9 +173,76 @@ def check_timestamp_freshness(client_ts: str) -> bool:
     return abs(now - ts) <= _REPLAY_WINDOW
 
 
+def build_submit_signature_fields(
+    *,
+    sender: str,
+    channel: str,
+    timestamp: str,
+    subject: str,
+    body: str,
+    recipients: str,
+    priority: str,
+    parent_id: Optional[str],
+    metadata: Optional[dict],
+) -> tuple[str, ...]:
+    return (
+        "submit",
+        sender,
+        channel,
+        timestamp,
+        subject,
+        body,
+        recipients,
+        priority,
+        _optional_text(parent_id),
+        canonical_metadata_json(metadata),
+    )
+
+
+def build_approve_signature_fields(
+    *, agent_id: str, message_id: str, timestamp: str, note: str
+) -> tuple[str, ...]:
+    return ("approve", agent_id, message_id, timestamp, note)
+
+
+def build_reject_signature_fields(
+    *, agent_id: str, message_id: str, timestamp: str, reason: str
+) -> tuple[str, ...]:
+    return ("reject", agent_id, message_id, timestamp, reason)
+
+
+def build_ack_signature_fields(
+    *, agent_id: str, message_id: str, timestamp: str
+) -> tuple[str, ...]:
+    return ("ack", agent_id, message_id, timestamp)
+
+
+def build_broadcast_signature_fields(
+    *,
+    sender: str,
+    channel: str,
+    timestamp: str,
+    subject: str,
+    body: str,
+    priority: str,
+    auto_approve: bool,
+) -> tuple[str, ...]:
+    return (
+        "broadcast",
+        sender,
+        channel,
+        timestamp,
+        subject,
+        body,
+        priority,
+        _bool_text(auto_approve),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Agent registry
 # ---------------------------------------------------------------------------
+
 
 def verify_agent(conn: sqlite3.Connection, agent_id: str) -> bool:
     """Check that agent_id exists in the registry. No auto-registration."""
@@ -186,9 +265,24 @@ def is_orchestrator(conn: sqlite3.Connection, agent_id: str) -> bool:
     return "orchestrator" in row["roles"].split(",")
 
 
+def message_targets_agent(recipients: str, agent_id: str) -> bool:
+    if recipients == "*":
+        return True
+    return agent_id in [part.strip() for part in recipients.split(",") if part.strip()]
+
+
+def can_agent_ack_message(message: dict, agent_id: str) -> bool:
+    return bool(
+        message
+        and message.get("status") == "APPROVED"
+        and message_targets_agent(message.get("recipients", ""), agent_id)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Message lifecycle
 # ---------------------------------------------------------------------------
+
 
 def submit_message(
     conn: sqlite3.Connection,
@@ -228,7 +322,7 @@ def submit_message(
             decided_at,
             decided_by,
             parent_id,
-            json.dumps(metadata or {}),
+            canonical_metadata_json(metadata),
             signature,
             client_ts,
         ),
@@ -272,12 +366,14 @@ def list_messages(
             "OR recipients LIKE ? "
             "OR recipients LIKE ?)"
         )
-        params.extend([
-            recipient,            # exact single recipient
-            f"{recipient},%",     # first in list
-            f"%,{recipient},%",   # middle of list
-            f"%,{recipient}",     # last in list
-        ])
+        params.extend(
+            [
+                recipient,  # exact single recipient
+                f"{recipient},%",  # first in list
+                f"%,{recipient},%",  # middle of list
+                f"%,{recipient}",  # last in list
+            ]
+        )
     if since:
         clauses.append("submitted_at > ?")
         params.append(since)
@@ -334,21 +430,25 @@ def reject_message(
 def ack_message(conn: sqlite3.Connection, message_id: str, agent_id: str) -> Optional[dict]:
     """Record per-recipient acknowledgement via message_receipts."""
     msg = get_message(conn, message_id)
-    if not msg or msg["status"] != "APPROVED":
+    if not can_agent_ack_message(msg or {}, agent_id):
         return None
     now = _now()
     conn.execute(
         """INSERT INTO message_receipts (message_id, recipient, acked_at)
            VALUES (?, ?, ?)
-           ON CONFLICT(message_id, recipient) DO UPDATE SET acked_at = excluded.acked_at""",
+           ON CONFLICT(message_id, recipient) DO NOTHING""",
         (message_id, agent_id, now),
     )
     conn.commit()
     touch_agent(conn, agent_id)
+    receipt = conn.execute(
+        "SELECT acked_at FROM message_receipts WHERE message_id = ? AND recipient = ?",
+        (message_id, agent_id),
+    ).fetchone()
     result = get_message(conn, message_id)
-    if result:
+    if result and receipt:
         result["acked_by"] = agent_id
-        result["acked_at"] = now
+        result["acked_at"] = receipt["acked_at"]
     return result
 
 

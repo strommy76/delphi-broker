@@ -63,7 +63,7 @@ def delphi_submit(
     recipients can see them.
 
     Signature protocol:
-      canonical = "submit|sender|channel|timestamp|subject|body|recipients"
+      canonical = "submit|sender|channel|timestamp|subject|body|recipients|priority|parent_id|metadata_json"
       signature = HMAC-SHA256(secret, canonical)
 
     Args:
@@ -82,8 +82,20 @@ def delphi_submit(
         if not db.verify_agent(conn, sender):
             return {"error": f"Unknown agent '{sender}' — not in registry"}
         err = _verify_sig(
-            sender, signature, timestamp,
-            "submit", sender, channel, timestamp, subject, body, recipients,
+            sender,
+            signature,
+            timestamp,
+            *db.build_submit_signature_fields(
+                sender=sender,
+                channel=channel,
+                timestamp=timestamp,
+                subject=subject,
+                body=body,
+                recipients=recipients,
+                priority=priority,
+                parent_id=parent_id,
+                metadata=None,
+            ),
         )
         if err:
             return {"error": err}
@@ -127,7 +139,7 @@ def delphi_inbox(
         if not db.verify_agent(conn, agent_id):
             return {"error": f"Unknown agent '{agent_id}' — not in registry"}
         db.touch_agent(conn, agent_id)
-        exclude_acked = (status == "APPROVED")
+        exclude_acked = status == "APPROVED"
         messages = db.list_messages(
             conn,
             status=status or None,
@@ -183,11 +195,22 @@ def delphi_ack(
         if not db.verify_agent(conn, agent_id):
             return {"error": f"Unknown agent '{agent_id}' — not in registry"}
         err = _verify_sig(
-            agent_id, signature, timestamp,
-            "ack", agent_id, message_id, timestamp,
+            agent_id,
+            signature,
+            timestamp,
+            *db.build_ack_signature_fields(
+                agent_id=agent_id,
+                message_id=message_id,
+                timestamp=timestamp,
+            ),
         )
         if err:
             return {"error": err}
+        message = db.get_message(conn, message_id)
+        if not message or message["status"] != "APPROVED":
+            return {"error": "Message not found or not in APPROVED status"}
+        if not db.can_agent_ack_message(message, agent_id):
+            return {"error": f"Agent '{agent_id}' is not a recipient of message '{message_id}'"}
         result = db.ack_message(conn, message_id, agent_id)
         if not result:
             return {"error": "Message not found or not in APPROVED status"}
@@ -206,7 +229,7 @@ def delphi_approve(
 ) -> dict:
     """Approve a pending message. Orchestrator-only.
 
-    Signature: HMAC-SHA256(secret, "approve|agent_id|message_id|timestamp")
+    Signature: HMAC-SHA256(secret, "approve|agent_id|message_id|timestamp|note")
 
     Args:
         message_id: The message UUID to approve
@@ -217,11 +240,20 @@ def delphi_approve(
     """
     conn = _conn()
     try:
+        if not db.verify_agent(conn, agent_id):
+            return {"error": f"Unknown agent '{agent_id}' — not in registry"}
         if not db.is_orchestrator(conn, agent_id):
             return {"error": f"Agent '{agent_id}' is not an orchestrator"}
         err = _verify_sig(
-            agent_id, signature, timestamp,
-            "approve", agent_id, message_id, timestamp,
+            agent_id,
+            signature,
+            timestamp,
+            *db.build_approve_signature_fields(
+                agent_id=agent_id,
+                message_id=message_id,
+                timestamp=timestamp,
+                note=note,
+            ),
         )
         if err:
             return {"error": err}
@@ -243,7 +275,7 @@ def delphi_reject(
 ) -> dict:
     """Reject a pending message. Orchestrator-only.
 
-    Signature: HMAC-SHA256(secret, "reject|agent_id|message_id|timestamp")
+    Signature: HMAC-SHA256(secret, "reject|agent_id|message_id|timestamp|reason")
 
     Args:
         message_id: The message UUID to reject
@@ -254,11 +286,20 @@ def delphi_reject(
     """
     conn = _conn()
     try:
+        if not db.verify_agent(conn, agent_id):
+            return {"error": f"Unknown agent '{agent_id}' — not in registry"}
         if not db.is_orchestrator(conn, agent_id):
             return {"error": f"Agent '{agent_id}' is not an orchestrator"}
         err = _verify_sig(
-            agent_id, signature, timestamp,
-            "reject", agent_id, message_id, timestamp,
+            agent_id,
+            signature,
+            timestamp,
+            *db.build_reject_signature_fields(
+                agent_id=agent_id,
+                message_id=message_id,
+                timestamp=timestamp,
+                reason=reason,
+            ),
         )
         if err:
             return {"error": err}
@@ -283,7 +324,7 @@ def delphi_broadcast(
 ) -> dict:
     """Broadcast a message to all agents. Orchestrator-only.
 
-    Signature: HMAC-SHA256(secret, "broadcast|sender|channel|timestamp|subject|body")
+    Signature: HMAC-SHA256(secret, "broadcast|sender|channel|timestamp|subject|body|priority|auto_approve")
 
     Args:
         sender: Your agent ID (must have orchestrator role)
@@ -297,11 +338,23 @@ def delphi_broadcast(
     """
     conn = _conn()
     try:
+        if not db.verify_agent(conn, sender):
+            return {"error": f"Unknown agent '{sender}' — not in registry"}
         if not db.is_orchestrator(conn, sender):
             return {"error": f"Agent '{sender}' is not an orchestrator"}
         err = _verify_sig(
-            sender, signature, timestamp,
-            "broadcast", sender, channel, timestamp, subject, body,
+            sender,
+            signature,
+            timestamp,
+            *db.build_broadcast_signature_fields(
+                sender=sender,
+                channel=channel,
+                timestamp=timestamp,
+                subject=subject,
+                body=body,
+                priority=priority,
+                auto_approve=auto_approve,
+            ),
         )
         if err:
             return {"error": err}

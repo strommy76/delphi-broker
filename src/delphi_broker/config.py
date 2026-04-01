@@ -47,11 +47,23 @@ DB_PATH: Path = (
 
 WEB_UI_AGENT_ID: str = os.environ.get("DELPHI_WEB_UI_AGENT_ID", "web-ui")
 WEB_UI_ROLES: str = os.environ.get("DELPHI_WEB_UI_ROLES", "orchestrator")
+WEB_UI_PASSWORD: str = os.environ.get("DELPHI_WEB_UI_PASSWORD", "").strip()
+
+if not WEB_UI_PASSWORD:
+    raise ValueError(
+        "Missing DELPHI_WEB_UI_PASSWORD in environment/.env. "
+        "The web approval surface requires explicit application-layer credentials."
+    )
 
 # ---------------------------------------------------------------------------
 # Agent registry (from config/agents.json)
 # ---------------------------------------------------------------------------
-_agents_file = _PROJECT_ROOT / "config" / "agents.json"
+_agents_path_raw = os.environ.get("DELPHI_AGENTS_PATH", "config/agents.json")
+_agents_file = (
+    Path(_agents_path_raw)
+    if Path(_agents_path_raw).is_absolute()
+    else _PROJECT_ROOT / _agents_path_raw
+)
 if not _agents_file.exists():
     raise FileNotFoundError(
         f"Agent registry not found: {_agents_file}. "
@@ -68,6 +80,6 @@ for _agent in SEED_AGENTS:
     if not _secret or _secret.startswith("GENERATE_WITH"):
         raise ValueError(
             f"Agent '{_agent['agent_id']}' has no valid secret in {_agents_file}. "
-            "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
         )
     AGENT_SECRETS[_agent["agent_id"]] = _secret
