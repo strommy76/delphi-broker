@@ -2,20 +2,32 @@
   "$schema": "Seed agent registry. Agents listed here are auto-registered on startup.",
   "agents": [
     {
-      "agent_id": "host1-codex",
-      "host": "host1",
+      "agent_id": "dev-codex",
+      "host": "desktop-vc94kou",
       "roles": "worker",
       "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
     },
     {
-      "agent_id": "host1-claude",
-      "host": "host1",
+      "agent_id": "dev-claude",
+      "host": "desktop-vc94kou",
       "roles": "worker",
       "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
     },
     {
-      "agent_id": "host2-claude",
-      "host": "host2",
+      "agent_id": "prod-codex",
+      "host": "bsalien",
+      "roles": "worker",
+      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
+    },
+    {
+      "agent_id": "prod-claude",
+      "host": "bsalien",
+      "roles": "worker",
+      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
+    },
+    {
+      "agent_id": "flow-claude",
+      "host": "bsflow",
       "roles": "worker,orchestrator",
       "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
     }

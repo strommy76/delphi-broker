@@ -15,7 +15,7 @@ Replaces manual copy-paste routing in a Delphi-method workflow where multiple in
 - **SQLite** (WAL mode) for message and agent state
 - **Message lifecycle:** `PENDING -> APPROVED/REJECTED -> ACKED`
 - **Role-based access:** orchestrator role required for approve/reject/broadcast
-- **Web UI auth:** HTTP Basic auth required for `/web/` using `web-ui` and `DELPHI_WEB_UI_PASSWORD`
+- **Web UI auth:** HTTP Basic auth required for `/web/` using `DELPHI_WEB_UI_AGENT_ID` and `DELPHI_WEB_UI_PASSWORD`
 
 ## Configuration
 
@@ -113,5 +113,6 @@ delphi-broker/
     static/             # CSS
   tests/
   AGENTS.md             # CLI agent execution contract
+  BOOTSTRAP.md          # Agent self-setup guide (secrets, MCP, verification)
   README.md
 ```
