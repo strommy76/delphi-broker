@@ -56,9 +56,20 @@ def submit_message(payload: MessageSubmit):
         if not db.verify_agent(conn, payload.sender):
             raise HTTPException(403, f"Unknown agent '{payload.sender}' — not in registry")
         _require_sig(
-            payload.sender, payload.signature, payload.timestamp,
-            "submit", payload.sender, payload.channel, payload.timestamp,
-            payload.subject, payload.body, payload.recipients,
+            payload.sender,
+            payload.signature,
+            payload.timestamp,
+            *db.build_submit_signature_fields(
+                sender=payload.sender,
+                channel=payload.channel,
+                timestamp=payload.timestamp,
+                subject=payload.subject,
+                body=payload.body,
+                recipients=payload.recipients,
+                priority=payload.priority,
+                parent_id=payload.parent_id,
+                metadata=payload.metadata,
+            ),
         )
         return db.submit_message(
             conn,
@@ -86,7 +97,7 @@ def inbox(
         if not db.verify_agent(conn, agent_id):
             raise HTTPException(403, f"Unknown agent '{agent_id}' — not in registry")
         db.touch_agent(conn, agent_id)
-        exclude_acked = (status == "APPROVED")
+        exclude_acked = status == "APPROVED"
         return db.list_messages(
             conn,
             status=status or None,
@@ -118,11 +129,20 @@ def pending(channel: str = "", limit: int = 50):
 def approve(message_id: str, payload: MessageDecision):
     conn = _conn()
     try:
+        if not db.verify_agent(conn, payload.agent_id):
+            raise HTTPException(403, f"Unknown agent '{payload.agent_id}' — not in registry")
         if not db.is_orchestrator(conn, payload.agent_id):
             raise HTTPException(403, f"Agent '{payload.agent_id}' is not an orchestrator")
         _require_sig(
-            payload.agent_id, payload.signature, payload.timestamp,
-            "approve", payload.agent_id, message_id, payload.timestamp,
+            payload.agent_id,
+            payload.signature,
+            payload.timestamp,
+            *db.build_approve_signature_fields(
+                agent_id=payload.agent_id,
+                message_id=message_id,
+                timestamp=payload.timestamp,
+                note=payload.note,
+            ),
         )
         result = db.approve_message(conn, message_id, payload.agent_id, payload.note)
         if not result:
@@ -136,11 +156,20 @@ def approve(message_id: str, payload: MessageDecision):
 def reject(message_id: str, payload: MessageReject):
     conn = _conn()
     try:
+        if not db.verify_agent(conn, payload.agent_id):
+            raise HTTPException(403, f"Unknown agent '{payload.agent_id}' — not in registry")
         if not db.is_orchestrator(conn, payload.agent_id):
             raise HTTPException(403, f"Agent '{payload.agent_id}' is not an orchestrator")
         _require_sig(
-            payload.agent_id, payload.signature, payload.timestamp,
-            "reject", payload.agent_id, message_id, payload.timestamp,
+            payload.agent_id,
+            payload.signature,
+            payload.timestamp,
+            *db.build_reject_signature_fields(
+                agent_id=payload.agent_id,
+                message_id=message_id,
+                timestamp=payload.timestamp,
+                reason=payload.reason,
+            ),
         )
         result = db.reject_message(conn, message_id, payload.agent_id, payload.reason)
         if not result:
@@ -157,9 +186,23 @@ def ack(message_id: str, payload: MessageAck):
         if not db.verify_agent(conn, payload.agent_id):
             raise HTTPException(403, f"Unknown agent '{payload.agent_id}' — not in registry")
         _require_sig(
-            payload.agent_id, payload.signature, payload.timestamp,
-            "ack", payload.agent_id, message_id, payload.timestamp,
+            payload.agent_id,
+            payload.signature,
+            payload.timestamp,
+            *db.build_ack_signature_fields(
+                agent_id=payload.agent_id,
+                message_id=message_id,
+                timestamp=payload.timestamp,
+            ),
         )
+        message = db.get_message(conn, message_id)
+        if not message or message["status"] != "APPROVED":
+            raise HTTPException(404, "Message not found or not APPROVED")
+        if not db.can_agent_ack_message(message, payload.agent_id):
+            raise HTTPException(
+                403,
+                f"Agent '{payload.agent_id}' is not a recipient of message '{message_id}'",
+            )
         result = db.ack_message(conn, message_id, payload.agent_id)
         if not result:
             raise HTTPException(404, "Message not found or not APPROVED")
@@ -172,12 +215,23 @@ def ack(message_id: str, payload: MessageAck):
 def broadcast(payload: BroadcastSubmit):
     conn = _conn()
     try:
+        if not db.verify_agent(conn, payload.sender):
+            raise HTTPException(403, f"Unknown agent '{payload.sender}' — not in registry")
         if not db.is_orchestrator(conn, payload.sender):
             raise HTTPException(403, f"Agent '{payload.sender}' is not an orchestrator")
         _require_sig(
-            payload.sender, payload.signature, payload.timestamp,
-            "broadcast", payload.sender, payload.channel, payload.timestamp,
-            payload.subject, payload.body,
+            payload.sender,
+            payload.signature,
+            payload.timestamp,
+            *db.build_broadcast_signature_fields(
+                sender=payload.sender,
+                channel=payload.channel,
+                timestamp=payload.timestamp,
+                subject=payload.subject,
+                body=payload.body,
+                priority=payload.priority,
+                auto_approve=payload.auto_approve,
+            ),
         )
         status = "APPROVED" if payload.auto_approve else "PENDING"
         return db.submit_message(

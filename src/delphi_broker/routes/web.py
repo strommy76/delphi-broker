@@ -3,8 +3,8 @@
 FILE:        web.py
 PATH:        C:/Projects/delphi-broker/src/delphi_broker/routes/web.py
 DESCRIPTION: Web UI routes for phone-friendly approval interface. The web UI
-             operates as the configured web-ui orchestrator identity — auth is
-             Tailnet-scoped, not application-scoped.
+             operates as the configured web-ui orchestrator identity and
+             requires explicit HTTP Basic auth.
 
 CHANGELOG:
 2026-03-31 17:30      Claude      [Harden] Fail-loud approve/reject, receipt
@@ -15,18 +15,37 @@ CHANGELOG:
 
 from __future__ import annotations
 
+import secrets
 from pathlib import Path
 
 import markdown
 import nh3
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
 from .. import database as db
-from ..config import DB_PATH, WEB_UI_AGENT_ID
+from ..config import DB_PATH, WEB_UI_AGENT_ID, WEB_UI_PASSWORD
 
-router = APIRouter(prefix="/web")
+_security = HTTPBasic()
+
+
+def _require_web_auth(
+    credentials: HTTPBasicCredentials = Depends(_security),
+) -> str:
+    username_ok = secrets.compare_digest(credentials.username, WEB_UI_AGENT_ID)
+    password_ok = secrets.compare_digest(credentials.password, WEB_UI_PASSWORD)
+    if not (username_ok and password_ok):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid web credentials",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
+
+router = APIRouter(prefix="/web", dependencies=[Depends(_require_web_auth)])
 
 _templates_dir = str(Path(__file__).resolve().parent.parent / "templates")
 templates = Jinja2Templates(directory=_templates_dir)
@@ -137,8 +156,11 @@ def message_detail(request: Request, message_id: str):
             reply["body_html"] = _render_body(reply["body"])
         receipts = db.get_receipts(conn, message_id)
         return _render(
-            request, "message_detail.html",
-            msg=msg, replies=replies, receipts=receipts,
+            request,
+            "message_detail.html",
+            msg=msg,
+            replies=replies,
+            receipts=receipts,
         )
     finally:
         conn.close()

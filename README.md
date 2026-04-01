@@ -15,6 +15,7 @@ Replaces manual copy-paste routing in a Delphi-method workflow where multiple in
 - **SQLite** (WAL mode) for message and agent state
 - **Message lifecycle:** `PENDING -> APPROVED/REJECTED -> ACKED`
 - **Role-based access:** orchestrator role required for approve/reject/broadcast
+- **Web UI auth:** HTTP Basic auth required for `/web/` using `web-ui` and `DELPHI_WEB_UI_PASSWORD`
 
 ## Configuration
 
@@ -24,6 +25,7 @@ Infrastructure config lives in `.env` (copy from `.env.example`):
 DELPHI_HOST=0.0.0.0
 DELPHI_PORT=8420
 DELPHI_DB_PATH=delphi.db
+DELPHI_WEB_UI_PASSWORD=change-me
 ```
 
 Agent registry lives in `config/agents.json` (gitignored, copy from example):
