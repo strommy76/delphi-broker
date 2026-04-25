@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     nudge_window_secs  INTEGER NOT NULL DEFAULT 60,
     created_at         TEXT NOT NULL,
     updated_at         TEXT NOT NULL,
-    finalized_prompt   TEXT
+    finalized_prompt   TEXT,
+    skipped_reviewers  TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS rounds (
@@ -206,6 +207,7 @@ def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
 def init_db(conn: sqlite3.Connection) -> None:
     """Create the v2 schema (idempotent) and seed the agents table."""
     conn.executescript(_SCHEMA)
+    _apply_migrations(conn)
     now = _now()
     for agent in SEED_AGENTS:
         conn.execute(
@@ -214,6 +216,17 @@ def init_db(conn: sqlite3.Connection) -> None:
             (agent["agent_id"], agent["host"], agent["role"], now, now),
         )
     conn.commit()
+
+
+def _apply_migrations(conn: sqlite3.Connection) -> None:
+    """Bring older test DBs up to current schema. Idempotent."""
+    cur = conn.execute("PRAGMA table_info(sessions)")
+    cols = {row["name"] for row in cur.fetchall()}
+    if "skipped_reviewers" not in cols:
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN skipped_reviewers TEXT NOT NULL DEFAULT '[]'"
+        )
+        conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +299,62 @@ def update_session_status(
     if session is None:  # pragma: no cover - defensive
         raise RuntimeError("session disappeared during status update")
     return session
+
+
+def get_skipped_reviewers(conn: sqlite3.Connection, session_id: str) -> list[str]:
+    """Return the JSON-decoded list of skipped reviewer agent ids on a session."""
+    session = get_session(conn, session_id)
+    if session is None:
+        raise ValueError(f"unknown session_id {session_id!r}")
+    raw = session.get("skipped_reviewers") or "[]"
+    try:
+        loaded = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"session {session_id!r} has corrupt skipped_reviewers: {raw!r}"
+        ) from exc
+    if not isinstance(loaded, list) or not all(isinstance(x, str) for x in loaded):
+        raise ValueError(
+            f"session {session_id!r} skipped_reviewers must be JSON list[str], got {loaded!r}"
+        )
+    return loaded
+
+
+def add_skipped_reviewer(
+    conn: sqlite3.Connection, session_id: str, agent_id: str
+) -> None:
+    """Append an agent_id to the session's skipped_reviewers list (no duplicates)."""
+    _require(agent_id, "agent_id")
+    current = get_skipped_reviewers(conn, session_id)
+    if agent_id in current:
+        return
+    current.append(agent_id)
+    now = _now()
+    cur = conn.execute(
+        "UPDATE sessions SET skipped_reviewers = ?, updated_at = ? WHERE id = ?",
+        (json.dumps(current), now, session_id),
+    )
+    if cur.rowcount == 0:
+        raise ValueError(f"unknown session_id {session_id!r}")
+    conn.commit()
+
+
+def round_2_outcome_for_session(
+    conn: sqlite3.Connection, session_id: str
+) -> Optional[str]:
+    """Return the outcome_text from the latest cross_host_arbitration round."""
+    cur = conn.execute(
+        """SELECT outcome_text FROM rounds
+            WHERE session_id = ?
+              AND round_type = 'cross_host_arbitration'
+         ORDER BY round_num DESC, started_at DESC
+            LIMIT 1""",
+        (session_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return None
+    return row["outcome_text"]
 
 
 def set_finalized_prompt(
