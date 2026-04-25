@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Delphi Broker — Login</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <h1>Delphi Broker</h1>
+  <div class="card">
+    <h2>Operator login</h2>
+    {% if request.query_params.get('error') %}
+      <p style="color:var(--rejected);">Invalid token. Try again.</p>
+    {% endif %}
+    <form method="post" action="/web/login">
+      <label for="password" class="card-meta">Operator token</label>
+      <textarea id="password" name="password" rows="2" autofocus required></textarea>
+      <div class="actions">
+        <button type="submit" class="btn btn-approve">Sign in</button>
+      </div>
+    </form>
+  </div>
+</body>
+</html>

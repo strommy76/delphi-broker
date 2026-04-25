@@ -132,6 +132,68 @@ class Agent(BaseModel):
     last_seen: str
 
 
+# ---------------------------------------------------------------------------
+# Request / response models (REST API)
+# ---------------------------------------------------------------------------
+
+
+class CreateSessionRequest(BaseModel):
+    problem_text: str = Field(min_length=1)
+    nudge_window_secs: int = Field(default=60, ge=0)
+
+
+class CreateSessionResponse(BaseModel):
+    session_id: str
+    status: SessionStatus
+
+
+class NudgeAction(str, Enum):
+    SUBMIT = "submit"
+    SKIP = "skip"
+
+
+class NudgeRequest(BaseModel):
+    iteration_id: str = Field(min_length=1)
+    action: NudgeAction
+    nudge_text: Optional[str] = None
+
+
+class NudgeResponse(BaseModel):
+    ok: bool = True
+    iteration_id: str
+    status: IterationStatus
+
+
+class AbortResponse(BaseModel):
+    ok: bool = True
+    status: SessionStatus
+
+
+class EscalationAction(str, Enum):
+    FORCE_CONVERGE = "force_converge"
+    RETRY = "retry"
+    ABORT = "abort"
+    SKIP_AGENT = "skip_agent"
+    PROCEED_TO_ARBITRATOR = "proceed_to_arbitrator"
+
+
+class EscalationResolveRequest(BaseModel):
+    action: EscalationAction
+    iteration_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    nudge_text: Optional[str] = None
+
+
+class EscalationResolveResponse(BaseModel):
+    ok: bool = True
+    new_status: SessionStatus
+
+
+class ApproveExecutionResponse(BaseModel):
+    ok: bool = True
+    status: SessionStatus
+
+
 __all__ = [
     "AgentRole",
     "IterationStatus",
@@ -145,4 +207,14 @@ __all__ = [
     "Iteration",
     "Review",
     "Agent",
+    "CreateSessionRequest",
+    "CreateSessionResponse",
+    "NudgeAction",
+    "NudgeRequest",
+    "NudgeResponse",
+    "AbortResponse",
+    "EscalationAction",
+    "EscalationResolveRequest",
+    "EscalationResolveResponse",
+    "ApproveExecutionResponse",
 ]

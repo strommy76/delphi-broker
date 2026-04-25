@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}New session — Delphi{% endblock %}
+{% block content %}
+<h1>New session</h1>
+<form method="post" action="/web/sessions/new">
+  <div class="card">
+    <label class="card-meta" for="problem_text">Problem text</label>
+    <textarea id="problem_text" name="problem_text" rows="6" autofocus required placeholder="Describe the problem clearly. The Delphi pipeline will iterate."></textarea>
+  </div>
+  <div class="card">
+    <label class="card-meta" for="nudge_window_secs">Nudge window (seconds)</label>
+    <textarea id="nudge_window_secs" name="nudge_window_secs" rows="1">60</textarea>
+  </div>
+  <div class="actions">
+    <button type="submit" class="btn btn-approve">Create</button>
+    <a class="btn" href="/web/">Cancel</a>
+  </div>
+</form>
+{% endblock %}

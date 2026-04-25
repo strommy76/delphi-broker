@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Resolve escalation — Delphi{% endblock %}
+{% block content %}
+<h1>Resolve escalation</h1>
+<div class="card">
+  <div class="card-header">
+    <strong>{{ session.problem_text[:80] }}</strong>
+    <span class="badge badge-rejected">{{ session.status }}</span>
+  </div>
+  <div class="card-meta">ID: <code>{{ session.id }}</code></div>
+</div>
+
+<form method="post" action="/web/session/{{ session.id }}/escalation/resolve">
+  <div class="card">
+    <h2>Action</h2>
+    <label><input type="radio" name="action" value="force_converge" checked> Force-converge open round 1</label><br>
+    <label><input type="radio" name="action" value="proceed_to_arbitrator"> Proceed to arbitrator anyway</label><br>
+    <label><input type="radio" name="action" value="retry"> Retry an iteration (requires iteration_id below)</label><br>
+    <label><input type="radio" name="action" value="skip_agent"> Skip an agent (requires agent_id below)</label><br>
+    <label><input type="radio" name="action" value="abort"> Abort</label><br>
+  </div>
+  <div class="card">
+    <h2>Optional fields</h2>
+    <label class="card-meta">iteration_id (for retry)</label>
+    <textarea name="iteration_id" rows="1"></textarea>
+    <label class="card-meta">agent_id (for skip_agent)</label>
+    <textarea name="agent_id" rows="1"></textarea>
+    <label class="card-meta">nudge_text (for retry)</label>
+    <textarea name="nudge_text" rows="2"></textarea>
+  </div>
+  <div class="actions">
+    <button type="submit" class="btn btn-approve">Apply</button>
+    <a class="btn" href="/web/session/{{ session.id }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

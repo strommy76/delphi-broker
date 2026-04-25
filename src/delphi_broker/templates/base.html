@@ -10,9 +10,11 @@
 <body>
   <nav class="nav">
     <span class="nav-brand">Delphi</span>
-    <a href="/web/">Dashboard</a>
-    <a href="/web/pending">Pending ({{ pending_count | default(0) }})</a>
-    <a href="/web/agents">Agents</a>
+    <a href="/web/">Sessions</a>
+    <a href="/web/sessions/new">New</a>
+    <form action="/web/logout" method="post" style="display:inline;margin-left:auto;">
+      <button type="submit" class="btn" style="background:transparent;color:var(--muted);">Logout</button>
+    </form>
   </nav>
   {% block content %}{% endblock %}
 </body>
