@@ -37,9 +37,11 @@ Past-session review is **not** a goal. Cross-agent context sharing is **not** a 
 | **Operator** | Bryan, via phone or laptop | Submits problems, optionally nudges at transitions, approves execution. Sole human in the loop. |
 | **Worker agent (host-pair member)** | Claude or Codex on a designated host | Receives draft inputs, produces refined drafts, self-reports convergence status |
 | **Arbitrator agent** | Single Claude (default: `flow-claude`) | Receives converged outputs from each host, produces cross-host synthesis |
-| **Executor** | Single Codex (default: `dev-codex`) | Receives final approved prompt, executes it |
+| **Executor** | Single Codex (e.g. `dev-codex-executor`) | Receives final approved prompt, executes it |
 
 A host always has exactly two worker agents (one Claude, one Codex). Number of hosts is configurable; default deployment has two (prod, dev).
+
+**Role constraint:** the `agents` schema enforces exactly one `role` per `agent_id` (`worker | arbitrator | executor`). The executor therefore cannot share an `agent_id` with any worker. If the operator wants the dev-host Codex to be the executor, they must register a *separate* identity (e.g. `dev-codex-executor`) reusing the same Codex CLI under a distinct agent env file. `DELPHI_EXECUTOR_AGENT_ID` defaults to `dev-codex` for back-compat, but production deployments should override.
 
 ---
 
