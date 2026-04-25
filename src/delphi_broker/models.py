@@ -1,96 +1,148 @@
-"""
---------------------------------------------------------------------------------
-FILE:        models.py
-PATH:        C:/Projects/delphi-broker/src/delphi_broker/models.py
-DESCRIPTION: Pydantic request/response models for all API surfaces.
+"""Pydantic models for the v2 iterative-pipeline data layer.
 
-CHANGELOG:
-2026-03-31 17:30      Claude      [Harden] Add timestamp/signature to all
-                                     authority-bearing mutation models
-2026-03-31 16:30      Claude      [Harden] Add timestamp/signature to submit
---------------------------------------------------------------------------------
+One model per persisted table, plus the enums that constrain status / role
+columns. These are imported by the API layer for request and response
+serialization; they intentionally mirror the shape returned by the DAO so the
+boundary between persistence and HTTP stays thin.
 """
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
 
-class MessageSubmit(BaseModel):
-    sender: str
-    channel: str
-    subject: str = ""
-    body: str
-    recipients: str = "*"
-    priority: str = "normal"
-    parent_id: Optional[str] = None
-    metadata: dict = Field(default_factory=dict)
-    timestamp: str = ""
-    signature: str = ""
+# ---------------------------------------------------------------------------
+# Enums
+# ---------------------------------------------------------------------------
 
 
-class MessageDecision(BaseModel):
-    agent_id: str
-    note: str = ""
-    timestamp: str = ""
-    signature: str = ""
+class SessionStatus(str, Enum):
+    DRAFTING = "drafting"
+    ROUND_1 = "round_1"
+    ROUND_2 = "round_2"
+    ROUND_3 = "round_3"
+    EXECUTING = "executing"
+    COMPLETE = "complete"
+    ABORTED = "aborted"
+    ESCALATED = "escalated"
 
 
-class MessageReject(BaseModel):
-    agent_id: str
-    reason: str = ""
-    timestamp: str = ""
-    signature: str = ""
+class RoundType(str, Enum):
+    SAME_HOST_PAIR = "same_host_pair"
+    CROSS_HOST_ARBITRATION = "cross_host_arbitration"
+    MULTI_AGENT_REVIEW = "multi_agent_review"
+    EXECUTE = "execute"
 
 
-class MessageAck(BaseModel):
-    agent_id: str
-    timestamp: str = ""
-    signature: str = ""
+class RoundStatus(str, Enum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    CONVERGED = "converged"
+    ESCALATED = "escalated"
+    COMPLETE = "complete"
+    ABORTED = "aborted"
 
 
-class BroadcastSubmit(BaseModel):
-    sender: str
-    channel: str
-    subject: str = ""
-    body: str
-    priority: str = "normal"
-    auto_approve: bool = True
-    timestamp: str = ""
-    signature: str = ""
+class IterationStatus(str, Enum):
+    AWAITING_NUDGE = "awaiting_nudge"
+    AWAITING_DESTINATION = "awaiting_destination"
+    COMPLETE = "complete"
+    OFF_SCRIPT = "off_script"
 
 
-class MessageOut(BaseModel):
-    message_id: str
-    channel: str
-    sender: str
-    recipients: str
-    subject: str
-    body: str
-    priority: str
-    status: str
-    submitted_at: str
-    decided_at: Optional[str] = None
-    decided_by: Optional[str] = None
-    decision_note: Optional[str] = None
-    parent_id: Optional[str] = None
-    metadata: dict = Field(default_factory=dict)
-    signature: Optional[str] = None
+class SelfAssessment(str, Enum):
+    CONVERGED = "converged"
+    MORE_WORK_NEEDED = "more_work_needed"
 
 
-class AgentOut(BaseModel):
+class ReviewDecision(str, Enum):
+    APPROVE = "approve"
+    REJECT = "reject"
+
+
+class AgentRole(str, Enum):
+    WORKER = "worker"
+    ARBITRATOR = "arbitrator"
+    EXECUTOR = "executor"
+
+
+# ---------------------------------------------------------------------------
+# Persisted rows
+# ---------------------------------------------------------------------------
+
+
+class Session(BaseModel):
+    id: str
+    problem_text: str
+    status: SessionStatus
+    nudge_window_secs: int = Field(default=60, ge=0)
+    created_at: str
+    updated_at: str
+    finalized_prompt: Optional[str] = None
+
+
+class Round(BaseModel):
+    id: str
+    session_id: str
+    round_num: int = Field(ge=1)
+    round_type: RoundType
+    host: Optional[str] = None
+    status: RoundStatus
+    started_at: str
+    ended_at: Optional[str] = None
+    outcome_text: Optional[str] = None
+
+
+class Iteration(BaseModel):
+    id: str
+    round_id: str
+    iter_num: int = Field(ge=1)
+    source_agent: Optional[str] = None
+    destination_agent: str
+    source_output: str
+    nudge_text: Optional[str] = None
+    nudge_window_closes_at: str
+    destination_output: Optional[str] = None
+    destination_self_assess: Optional[SelfAssessment] = None
+    destination_rationale: Optional[str] = None
+    source_emitted_at: str
+    destination_received_at: Optional[str] = None
+    destination_emitted_at: Optional[str] = None
+    status: IterationStatus
+
+
+class Review(BaseModel):
+    id: str
+    round_id: str
+    reviewer_agent: str
+    decision: ReviewDecision
+    comments: Optional[str] = None
+    rationale: Optional[str] = None
+    emitted_at: str
+
+
+class Agent(BaseModel):
     agent_id: str
     host: str
-    roles: str
+    role: AgentRole
     first_seen: str
     last_seen: str
 
 
-class ChannelSummary(BaseModel):
-    channel: str
-    total: int
-    pending: int
-    approved: int
-    rejected: int
+__all__ = [
+    "AgentRole",
+    "IterationStatus",
+    "ReviewDecision",
+    "RoundStatus",
+    "RoundType",
+    "SelfAssessment",
+    "SessionStatus",
+    "Session",
+    "Round",
+    "Iteration",
+    "Review",
+    "Agent",
+]

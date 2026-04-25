@@ -1,17 +1,14 @@
-"""
---------------------------------------------------------------------------------
-FILE:        database.py
-PATH:        C:/Projects/delphi-broker/src/delphi_broker/database.py
-DESCRIPTION: SQLite database layer — schema, HMAC verification, message
-             lifecycle, and per-recipient delivery tracking.
+"""SQLite data layer for the v2 iterative-pipeline broker.
 
-CHANGELOG:
-2026-03-31 17:30      Claude      [Harden] HMAC on all mutations, per-recipient
-                                     receipts, replay protection, schema migration,
-                                     agent verification on all paths
-2026-03-31 16:30      Claude      [Harden] HMAC-SHA256 signing, exact recipient
-                                     matching, atomic transitions, kill auto-reg
---------------------------------------------------------------------------------
+Schema, DAO operations, and HMAC signature builders for the session / round /
+iteration / review model defined in `DESIGN.md`. The v1 messages and
+message_receipts tables and their lifecycle are gone; nothing in this module
+references them.
+
+All public functions are synchronous (stdlib `sqlite3`). Callers commit per
+operation so the broker never leaves a half-applied transition on disk. Fail
+loud on any contract violation: missing FK, invalid enum value, unknown
+agent_id, etc.
 """
 
 from __future__ import annotations
@@ -21,80 +18,179 @@ import hmac
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from .config import DB_PATH, SEED_AGENTS, WEB_UI_AGENT_ID, WEB_UI_ROLES
+from .config import DB_PATH, SEED_AGENTS
+
+# ---------------------------------------------------------------------------
+# Schema
+# ---------------------------------------------------------------------------
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS sessions (
+    id                 TEXT PRIMARY KEY,
+    problem_text       TEXT NOT NULL,
+    status             TEXT NOT NULL CHECK(status IN (
+                            'drafting','round_1','round_2','round_3',
+                            'executing','complete','aborted','escalated')),
+    nudge_window_secs  INTEGER NOT NULL DEFAULT 60,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL,
+    finalized_prompt   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS rounds (
+    id            TEXT PRIMARY KEY,
+    session_id    TEXT NOT NULL REFERENCES sessions(id),
+    round_num     INTEGER NOT NULL,
+    round_type    TEXT NOT NULL CHECK(round_type IN (
+                       'same_host_pair','cross_host_arbitration',
+                       'multi_agent_review','execute')),
+    host          TEXT,
+    status        TEXT NOT NULL CHECK(status IN (
+                       'pending','in_progress','converged','escalated',
+                       'complete','aborted')),
+    started_at    TEXT NOT NULL,
+    ended_at      TEXT,
+    outcome_text  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS iterations (
+    id                       TEXT PRIMARY KEY,
+    round_id                 TEXT NOT NULL REFERENCES rounds(id),
+    iter_num                 INTEGER NOT NULL,
+    source_agent             TEXT,
+    destination_agent        TEXT NOT NULL,
+    source_output            TEXT NOT NULL,
+    nudge_text               TEXT,
+    nudge_window_closes_at   TEXT NOT NULL,
+    destination_output       TEXT,
+    destination_self_assess  TEXT CHECK(destination_self_assess IN (
+                                  'converged','more_work_needed')),
+    destination_rationale    TEXT,
+    source_emitted_at        TEXT NOT NULL,
+    destination_received_at  TEXT,
+    destination_emitted_at   TEXT,
+    status                   TEXT NOT NULL CHECK(status IN (
+                                  'awaiting_nudge','awaiting_destination',
+                                  'complete','off_script'))
+);
+
+CREATE TABLE IF NOT EXISTS reviews (
+    id              TEXT PRIMARY KEY,
+    round_id        TEXT NOT NULL REFERENCES rounds(id),
+    reviewer_agent  TEXT NOT NULL,
+    decision        TEXT NOT NULL CHECK(decision IN ('approve','reject')),
+    comments        TEXT,
+    rationale       TEXT,
+    emitted_at      TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS agents (
     agent_id    TEXT PRIMARY KEY,
     host        TEXT NOT NULL,
-    roles       TEXT NOT NULL DEFAULT '',
+    role        TEXT NOT NULL CHECK(role IN ('worker','arbitrator','executor')),
     first_seen  TEXT NOT NULL,
-    last_seen   TEXT NOT NULL,
-    metadata    TEXT DEFAULT '{}'
+    last_seen   TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS messages (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    message_id    TEXT NOT NULL UNIQUE,
-    channel       TEXT NOT NULL,
-    sender        TEXT NOT NULL,
-    recipients    TEXT NOT NULL DEFAULT '*',
-    subject       TEXT NOT NULL DEFAULT '',
-    body          TEXT NOT NULL,
-    priority      TEXT NOT NULL DEFAULT 'normal',
-    status        TEXT NOT NULL DEFAULT 'PENDING',
-    submitted_at  TEXT NOT NULL,
-    decided_at    TEXT,
-    decided_by    TEXT,
-    decision_note TEXT DEFAULT '',
-    parent_id     TEXT,
-    metadata      TEXT DEFAULT '{}',
-    signature     TEXT DEFAULT '',
-    client_ts     TEXT DEFAULT ''
-);
-
-CREATE TABLE IF NOT EXISTS message_receipts (
-    message_id  TEXT NOT NULL,
-    recipient   TEXT NOT NULL,
-    acked_at    TEXT,
-    PRIMARY KEY (message_id, recipient)
-);
-
-CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel);
-CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
-CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender);
-CREATE INDEX IF NOT EXISTS idx_messages_submitted_at ON messages(submitted_at);
-CREATE INDEX IF NOT EXISTS idx_messages_parent_id ON messages(parent_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_status         ON sessions(status);
+CREATE INDEX IF NOT EXISTS idx_rounds_session_round    ON rounds(session_id, round_num);
+CREATE INDEX IF NOT EXISTS idx_iterations_round_iter   ON iterations(round_id, iter_num);
+CREATE INDEX IF NOT EXISTS idx_iterations_status       ON iterations(status);
+CREATE INDEX IF NOT EXISTS idx_reviews_round           ON reviews(round_id);
 """
 
-# Indexes that depend on migrated columns — applied after ALTER TABLE
-_POST_MIGRATION_SQL = """
-CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_signature_unique
-    ON messages(signature) WHERE signature != '';
-"""
+# ---------------------------------------------------------------------------
+# Enum tuples (mirror Pydantic enums; keep here to avoid circular imports)
+# ---------------------------------------------------------------------------
 
-# Columns that may not exist in older databases — migrated on startup
-_MIGRATIONS = [
-    ("messages", "signature", "TEXT DEFAULT ''"),
-    ("messages", "client_ts", "TEXT DEFAULT ''"),
-]
+_SESSION_STATUSES = (
+    "drafting",
+    "round_1",
+    "round_2",
+    "round_3",
+    "executing",
+    "complete",
+    "aborted",
+    "escalated",
+)
+_ROUND_TYPES = (
+    "same_host_pair",
+    "cross_host_arbitration",
+    "multi_agent_review",
+    "execute",
+)
+_ROUND_STATUSES = (
+    "pending",
+    "in_progress",
+    "converged",
+    "escalated",
+    "complete",
+    "aborted",
+)
+_ITERATION_STATUSES = (
+    "awaiting_nudge",
+    "awaiting_destination",
+    "complete",
+    "off_script",
+)
+_SELF_ASSESSMENTS = ("converged", "more_work_needed")
+_REVIEW_DECISIONS = ("approve", "reject")
 
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
+# Replay window: reject signed payloads with timestamps older than this.
+_REPLAY_WINDOW = timedelta(minutes=5)
 
 _initialized: set[str] = set()
 
-# Replay window: reject signed messages older than this
-_REPLAY_WINDOW = timedelta(minutes=5)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _now() -> str:
+    """Return the current instant as an ISO-8601 UTC string."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _new_id() -> str:
+    return str(uuid.uuid4())
+
+
+def _row_to_dict(row: Optional[sqlite3.Row]) -> Optional[dict]:
+    if row is None:
+        return None
+    return dict(row)
+
+
+def _require(value: object, label: str) -> None:
+    if value is None or (isinstance(value, str) and not value):
+        raise ValueError(f"{label} is required")
+
+
+def _check_enum(value: str, valid: tuple[str, ...], label: str) -> None:
+    if value not in valid:
+        raise ValueError(f"{label} {value!r} not in {valid}")
+
+
+def _optional_text(value: Optional[str]) -> str:
+    return value or ""
+
+
+def _bool_text(value: bool) -> str:
+    return "true" if value else "false"
+
+
+# ---------------------------------------------------------------------------
+# Connection / init
+# ---------------------------------------------------------------------------
 
 
 def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
+    """Open a SQLite connection, initializing the schema on first use."""
     path = db_path or DB_PATH
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
@@ -108,139 +204,476 @@ def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
 
 
 def init_db(conn: sqlite3.Connection) -> None:
+    """Create the v2 schema (idempotent) and seed the agents table."""
     conn.executescript(_SCHEMA)
-    _apply_migrations(conn)
-    conn.executescript(_POST_MIGRATION_SQL)
     now = _now()
     for agent in SEED_AGENTS:
         conn.execute(
-            """INSERT OR IGNORE INTO agents (agent_id, host, roles, first_seen, last_seen)
+            """INSERT OR IGNORE INTO agents (agent_id, host, role, first_seen, last_seen)
                VALUES (?, ?, ?, ?, ?)""",
-            (agent["agent_id"], agent["host"], agent["roles"], now, now),
+            (agent["agent_id"], agent["host"], agent["role"], now, now),
         )
-    conn.execute(
-        """INSERT OR IGNORE INTO agents (agent_id, host, roles, first_seen, last_seen)
-           VALUES (?, ?, ?, ?, ?)""",
-        (WEB_UI_AGENT_ID, "web", WEB_UI_ROLES, now, now),
-    )
     conn.commit()
 
 
-def _apply_migrations(conn: sqlite3.Connection) -> None:
-    """Add missing columns to existing tables (safe for fresh and upgraded DBs)."""
-    for table, column, col_type in _MIGRATIONS:
-        try:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-
-
 # ---------------------------------------------------------------------------
-# HMAC signing
+# Sessions
 # ---------------------------------------------------------------------------
 
 
-def canonical_metadata_json(metadata: Optional[dict]) -> str:
-    """Serialize metadata deterministically for signature and persistence."""
-    return json.dumps(metadata or {}, sort_keys=True, separators=(",", ":"))
+def create_session(
+    conn: sqlite3.Connection,
+    *,
+    problem_text: str,
+    nudge_window_secs: int = 60,
+) -> dict:
+    _require(problem_text, "problem_text")
+    if nudge_window_secs < 0:
+        raise ValueError("nudge_window_secs must be >= 0")
+    session_id = _new_id()
+    now = _now()
+    conn.execute(
+        """INSERT INTO sessions
+              (id, problem_text, status, nudge_window_secs, created_at, updated_at)
+           VALUES (?, ?, 'drafting', ?, ?, ?)""",
+        (session_id, problem_text, nudge_window_secs, now, now),
+    )
+    conn.commit()
+    session = get_session(conn, session_id)
+    if session is None:  # pragma: no cover - defensive
+        raise RuntimeError("session insert succeeded but row not found")
+    return session
 
 
-def _optional_text(value: Optional[str]) -> str:
-    return value or ""
+def get_session(conn: sqlite3.Connection, session_id: str) -> Optional[dict]:
+    cur = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
+    return _row_to_dict(cur.fetchone())
 
 
-def _bool_text(value: bool) -> str:
-    return "true" if value else "false"
+def list_sessions(
+    conn: sqlite3.Connection,
+    *,
+    status: Optional[str] = None,
+    limit: int = 50,
+) -> list[dict]:
+    if status is not None:
+        _check_enum(status, _SESSION_STATUSES, "session status")
+        cur = conn.execute(
+            "SELECT * FROM sessions WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+            (status, limit),
+        )
+    else:
+        cur = conn.execute(
+            "SELECT * FROM sessions ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        )
+    return [dict(row) for row in cur.fetchall()]
 
 
-def compute_signature(secret: str, *fields: str) -> str:
-    """Compute HMAC-SHA256 over pipe-delimited fields.
+def update_session_status(
+    conn: sqlite3.Connection, session_id: str, status: str
+) -> dict:
+    _check_enum(status, _SESSION_STATUSES, "session status")
+    now = _now()
+    cur = conn.execute(
+        "UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?",
+        (status, now, session_id),
+    )
+    if cur.rowcount == 0:
+        raise ValueError(f"unknown session_id {session_id!r}")
+    conn.commit()
+    session = get_session(conn, session_id)
+    if session is None:  # pragma: no cover - defensive
+        raise RuntimeError("session disappeared during status update")
+    return session
 
-    Every call site passes an action prefix as the first field to prevent
-    cross-action signature reuse.
+
+def set_finalized_prompt(
+    conn: sqlite3.Connection, session_id: str, prompt: str
+) -> None:
+    _require(prompt, "prompt")
+    now = _now()
+    cur = conn.execute(
+        "UPDATE sessions SET finalized_prompt = ?, updated_at = ? WHERE id = ?",
+        (prompt, now, session_id),
+    )
+    if cur.rowcount == 0:
+        raise ValueError(f"unknown session_id {session_id!r}")
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Rounds
+# ---------------------------------------------------------------------------
+
+
+def create_round(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    round_num: int,
+    round_type: str,
+    host: Optional[str] = None,
+) -> dict:
+    if get_session(conn, session_id) is None:
+        raise ValueError(f"unknown session_id {session_id!r}")
+    if round_num < 1:
+        raise ValueError("round_num must be >= 1")
+    _check_enum(round_type, _ROUND_TYPES, "round_type")
+    round_id = _new_id()
+    now = _now()
+    conn.execute(
+        """INSERT INTO rounds
+              (id, session_id, round_num, round_type, host, status, started_at)
+           VALUES (?, ?, ?, ?, ?, 'pending', ?)""",
+        (round_id, session_id, round_num, round_type, host, now),
+    )
+    conn.commit()
+    rnd = get_round(conn, round_id)
+    if rnd is None:  # pragma: no cover - defensive
+        raise RuntimeError("round insert succeeded but row not found")
+    return rnd
+
+
+def get_round(conn: sqlite3.Connection, round_id: str) -> Optional[dict]:
+    cur = conn.execute("SELECT * FROM rounds WHERE id = ?", (round_id,))
+    return _row_to_dict(cur.fetchone())
+
+
+def list_rounds_for_session(conn: sqlite3.Connection, session_id: str) -> list[dict]:
+    cur = conn.execute(
+        """SELECT * FROM rounds WHERE session_id = ?
+           ORDER BY round_num ASC, host ASC""",
+        (session_id,),
+    )
+    return [dict(row) for row in cur.fetchall()]
+
+
+def update_round_status(
+    conn: sqlite3.Connection,
+    round_id: str,
+    status: str,
+    outcome_text: Optional[str] = None,
+) -> dict:
+    _check_enum(status, _ROUND_STATUSES, "round status")
+    now = _now()
+    terminal = {"converged", "complete", "aborted", "escalated"}
+    if status in terminal:
+        cur = conn.execute(
+            """UPDATE rounds
+                  SET status = ?, outcome_text = COALESCE(?, outcome_text), ended_at = ?
+                WHERE id = ?""",
+            (status, outcome_text, now, round_id),
+        )
+    else:
+        cur = conn.execute(
+            """UPDATE rounds
+                  SET status = ?, outcome_text = COALESCE(?, outcome_text)
+                WHERE id = ?""",
+            (status, outcome_text, round_id),
+        )
+    if cur.rowcount == 0:
+        raise ValueError(f"unknown round_id {round_id!r}")
+    conn.commit()
+    rnd = get_round(conn, round_id)
+    if rnd is None:  # pragma: no cover - defensive
+        raise RuntimeError("round disappeared during status update")
+    return rnd
+
+
+def current_round_for_session(
+    conn: sqlite3.Connection, session_id: str
+) -> Optional[dict]:
+    """Return the highest-numbered round that is still pending or in-progress."""
+    cur = conn.execute(
+        """SELECT * FROM rounds
+            WHERE session_id = ? AND status IN ('pending','in_progress')
+         ORDER BY round_num DESC, started_at DESC
+            LIMIT 1""",
+        (session_id,),
+    )
+    return _row_to_dict(cur.fetchone())
+
+
+# ---------------------------------------------------------------------------
+# Iterations
+# ---------------------------------------------------------------------------
+
+
+def create_iteration(
+    conn: sqlite3.Connection,
+    *,
+    round_id: str,
+    iter_num: int,
+    source_agent: Optional[str],
+    destination_agent: str,
+    source_output: str,
+    nudge_window_secs: int,
+) -> dict:
+    if get_round(conn, round_id) is None:
+        raise ValueError(f"unknown round_id {round_id!r}")
+    _require(destination_agent, "destination_agent")
+    _require(source_output, "source_output")
+    if iter_num < 1:
+        raise ValueError("iter_num must be >= 1")
+    if nudge_window_secs < 0:
+        raise ValueError("nudge_window_secs must be >= 0")
+
+    iter_id = _new_id()
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    closes_at = (now_dt + timedelta(seconds=nudge_window_secs)).isoformat()
+
+    conn.execute(
+        """INSERT INTO iterations
+              (id, round_id, iter_num, source_agent, destination_agent,
+               source_output, nudge_text, nudge_window_closes_at,
+               source_emitted_at, status)
+           VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, 'awaiting_nudge')""",
+        (
+            iter_id,
+            round_id,
+            iter_num,
+            source_agent,
+            destination_agent,
+            source_output,
+            closes_at,
+            now,
+        ),
+    )
+    conn.commit()
+    iteration = get_iteration(conn, iter_id)
+    if iteration is None:  # pragma: no cover - defensive
+        raise RuntimeError("iteration insert succeeded but row not found")
+    return iteration
+
+
+def get_iteration(conn: sqlite3.Connection, iteration_id: str) -> Optional[dict]:
+    cur = conn.execute("SELECT * FROM iterations WHERE id = ?", (iteration_id,))
+    return _row_to_dict(cur.fetchone())
+
+
+def list_iterations_for_round(
+    conn: sqlite3.Connection, round_id: str
+) -> list[dict]:
+    cur = conn.execute(
+        "SELECT * FROM iterations WHERE round_id = ? ORDER BY iter_num ASC",
+        (round_id,),
+    )
+    return [dict(row) for row in cur.fetchall()]
+
+
+def latest_iteration_for_round(
+    conn: sqlite3.Connection, round_id: str
+) -> Optional[dict]:
+    cur = conn.execute(
+        """SELECT * FROM iterations WHERE round_id = ?
+           ORDER BY iter_num DESC LIMIT 1""",
+        (round_id,),
+    )
+    return _row_to_dict(cur.fetchone())
+
+
+def _set_iteration_to_awaiting_destination(
+    conn: sqlite3.Connection, iteration_id: str, nudge_text: Optional[str]
+) -> dict:
+    iteration = get_iteration(conn, iteration_id)
+    if iteration is None:
+        raise ValueError(f"unknown iteration_id {iteration_id!r}")
+    if iteration["status"] != "awaiting_nudge":
+        raise ValueError(
+            f"iteration {iteration_id!r} is in status {iteration['status']!r}, "
+            "expected 'awaiting_nudge'"
+        )
+    now = _now()
+    conn.execute(
+        """UPDATE iterations
+              SET nudge_text = ?, status = 'awaiting_destination',
+                  destination_received_at = ?
+            WHERE id = ?""",
+        (nudge_text, now, iteration_id),
+    )
+    conn.commit()
+    updated = get_iteration(conn, iteration_id)
+    if updated is None:  # pragma: no cover - defensive
+        raise RuntimeError("iteration disappeared during nudge transition")
+    return updated
+
+
+def apply_nudge(
+    conn: sqlite3.Connection, iteration_id: str, nudge_text: str
+) -> dict:
+    _require(nudge_text, "nudge_text")
+    return _set_iteration_to_awaiting_destination(conn, iteration_id, nudge_text)
+
+
+def skip_nudge(conn: sqlite3.Connection, iteration_id: str) -> dict:
+    return _set_iteration_to_awaiting_destination(conn, iteration_id, None)
+
+
+def record_destination_response(
+    conn: sqlite3.Connection,
+    iteration_id: str,
+    *,
+    output: str,
+    self_assessment: str,
+    rationale: str,
+) -> dict:
+    _require(output, "output")
+    _check_enum(self_assessment, _SELF_ASSESSMENTS, "self_assessment")
+    iteration = get_iteration(conn, iteration_id)
+    if iteration is None:
+        raise ValueError(f"unknown iteration_id {iteration_id!r}")
+    if iteration["status"] != "awaiting_destination":
+        raise ValueError(
+            f"iteration {iteration_id!r} is in status {iteration['status']!r}, "
+            "expected 'awaiting_destination'"
+        )
+    now = _now()
+    conn.execute(
+        """UPDATE iterations
+              SET destination_output = ?, destination_self_assess = ?,
+                  destination_rationale = ?, destination_emitted_at = ?,
+                  status = 'complete'
+            WHERE id = ?""",
+        (output, self_assessment, rationale, now, iteration_id),
+    )
+    conn.commit()
+    updated = get_iteration(conn, iteration_id)
+    if updated is None:  # pragma: no cover - defensive
+        raise RuntimeError("iteration disappeared during response record")
+    return updated
+
+
+def mark_iteration_off_script(
+    conn: sqlite3.Connection, iteration_id: str, reason: str
+) -> dict:
+    _require(reason, "reason")
+    iteration = get_iteration(conn, iteration_id)
+    if iteration is None:
+        raise ValueError(f"unknown iteration_id {iteration_id!r}")
+    if iteration["status"] in ("complete", "off_script"):
+        raise ValueError(
+            f"iteration {iteration_id!r} already terminal ({iteration['status']!r})"
+        )
+    conn.execute(
+        """UPDATE iterations
+              SET status = 'off_script', destination_rationale = ?
+            WHERE id = ?""",
+        (reason, iteration_id),
+    )
+    conn.commit()
+    updated = get_iteration(conn, iteration_id)
+    if updated is None:  # pragma: no cover - defensive
+        raise RuntimeError("iteration disappeared during off_script mark")
+    return updated
+
+
+def find_pending_iterations(
+    conn: sqlite3.Connection, session_id: Optional[str] = None
+) -> list[dict]:
+    """Return iterations awaiting nudge whose window has already closed.
+
+    The caller is expected to feed each result into `skip_nudge` (default
+    action when the operator hasn't responded in time).
     """
-    canonical = "|".join(fields)
-    return hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+    now = _now()
+    if session_id is None:
+        cur = conn.execute(
+            """SELECT i.* FROM iterations i
+               WHERE i.status = 'awaiting_nudge'
+                 AND i.nudge_window_closes_at <= ?
+            ORDER BY i.source_emitted_at ASC""",
+            (now,),
+        )
+    else:
+        cur = conn.execute(
+            """SELECT i.* FROM iterations i
+                 JOIN rounds r ON r.id = i.round_id
+               WHERE r.session_id = ?
+                 AND i.status = 'awaiting_nudge'
+                 AND i.nudge_window_closes_at <= ?
+            ORDER BY i.source_emitted_at ASC""",
+            (session_id, now),
+        )
+    return [dict(row) for row in cur.fetchall()]
 
 
-def check_timestamp_freshness(client_ts: str) -> bool:
-    """Reject timestamps outside the replay window."""
-    try:
-        ts = datetime.fromisoformat(client_ts.replace("Z", "+00:00"))
-    except (ValueError, AttributeError):
-        return False
-    now = datetime.now(timezone.utc)
-    return abs(now - ts) <= _REPLAY_WINDOW
+def find_inbox_for_agent(conn: sqlite3.Connection, agent_id: str) -> list[dict]:
+    """Return work items addressed to `agent_id`.
 
-
-def build_submit_signature_fields(
-    *,
-    sender: str,
-    channel: str,
-    timestamp: str,
-    subject: str,
-    body: str,
-    recipients: str,
-    priority: str,
-    parent_id: Optional[str],
-    metadata: Optional[dict],
-) -> tuple[str, ...]:
-    return (
-        "submit",
-        sender,
-        channel,
-        timestamp,
-        subject,
-        body,
-        recipients,
-        priority,
-        _optional_text(parent_id),
-        canonical_metadata_json(metadata),
+    Currently this returns iterations whose status is `awaiting_destination`
+    and whose `destination_agent` matches the supplied agent. Round-3 review
+    requests live in a separate table — callers that need to merge them in
+    should query `reviews` and `rounds` directly (or use the workflow engine
+    layer once it lands in a follow-up commit).
+    """
+    cur = conn.execute(
+        """SELECT * FROM iterations
+            WHERE status = 'awaiting_destination'
+              AND destination_agent = ?
+         ORDER BY destination_received_at ASC""",
+        (agent_id,),
     )
-
-
-def build_approve_signature_fields(
-    *, agent_id: str, message_id: str, timestamp: str, note: str
-) -> tuple[str, ...]:
-    return ("approve", agent_id, message_id, timestamp, note)
-
-
-def build_reject_signature_fields(
-    *, agent_id: str, message_id: str, timestamp: str, reason: str
-) -> tuple[str, ...]:
-    return ("reject", agent_id, message_id, timestamp, reason)
-
-
-def build_ack_signature_fields(
-    *, agent_id: str, message_id: str, timestamp: str
-) -> tuple[str, ...]:
-    return ("ack", agent_id, message_id, timestamp)
-
-
-def build_broadcast_signature_fields(
-    *,
-    sender: str,
-    channel: str,
-    timestamp: str,
-    subject: str,
-    body: str,
-    priority: str,
-    auto_approve: bool,
-) -> tuple[str, ...]:
-    return (
-        "broadcast",
-        sender,
-        channel,
-        timestamp,
-        subject,
-        body,
-        priority,
-        _bool_text(auto_approve),
-    )
+    return [dict(row) for row in cur.fetchall()]
 
 
 # ---------------------------------------------------------------------------
-# Agent registry
+# Reviews
+# ---------------------------------------------------------------------------
+
+
+def create_review(
+    conn: sqlite3.Connection,
+    *,
+    round_id: str,
+    reviewer_agent: str,
+    decision: str,
+    comments: Optional[str] = None,
+    rationale: Optional[str] = None,
+) -> dict:
+    if get_round(conn, round_id) is None:
+        raise ValueError(f"unknown round_id {round_id!r}")
+    _require(reviewer_agent, "reviewer_agent")
+    _check_enum(decision, _REVIEW_DECISIONS, "decision")
+    review_id = _new_id()
+    now = _now()
+    conn.execute(
+        """INSERT INTO reviews
+              (id, round_id, reviewer_agent, decision, comments, rationale, emitted_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (review_id, round_id, reviewer_agent, decision, comments, rationale, now),
+    )
+    conn.commit()
+    cur = conn.execute("SELECT * FROM reviews WHERE id = ?", (review_id,))
+    row = _row_to_dict(cur.fetchone())
+    if row is None:  # pragma: no cover - defensive
+        raise RuntimeError("review insert succeeded but row not found")
+    return row
+
+
+def list_reviews_for_round(conn: sqlite3.Connection, round_id: str) -> list[dict]:
+    cur = conn.execute(
+        "SELECT * FROM reviews WHERE round_id = ? ORDER BY emitted_at ASC",
+        (round_id,),
+    )
+    return [dict(row) for row in cur.fetchall()]
+
+
+def find_pending_reviewers_for_round(
+    conn: sqlite3.Connection, round_id: str, expected_reviewers: list[str]
+) -> list[str]:
+    """Return reviewer agent ids in `expected_reviewers` that haven't reviewed yet."""
+    cur = conn.execute(
+        "SELECT reviewer_agent FROM reviews WHERE round_id = ?",
+        (round_id,),
+    )
+    submitted = {row["reviewer_agent"] for row in cur.fetchall()}
+    return [r for r in expected_reviewers if r not in submitted]
+
+
+# ---------------------------------------------------------------------------
+# Agents
 # ---------------------------------------------------------------------------
 
 
@@ -257,215 +690,9 @@ def touch_agent(conn: sqlite3.Connection, agent_id: str) -> None:
     conn.commit()
 
 
-def is_orchestrator(conn: sqlite3.Connection, agent_id: str) -> bool:
-    cur = conn.execute("SELECT roles FROM agents WHERE agent_id = ?", (agent_id,))
-    row = cur.fetchone()
-    if not row:
-        return False
-    return "orchestrator" in row["roles"].split(",")
-
-
-def message_targets_agent(recipients: str, agent_id: str) -> bool:
-    if recipients == "*":
-        return True
-    return agent_id in [part.strip() for part in recipients.split(",") if part.strip()]
-
-
-def can_agent_ack_message(message: dict, agent_id: str) -> bool:
-    return bool(
-        message
-        and message.get("status") == "APPROVED"
-        and message_targets_agent(message.get("recipients", ""), agent_id)
-    )
-
-
-# ---------------------------------------------------------------------------
-# Message lifecycle
-# ---------------------------------------------------------------------------
-
-
-def submit_message(
-    conn: sqlite3.Connection,
-    *,
-    sender: str,
-    channel: str,
-    subject: str,
-    body: str,
-    recipients: str = "*",
-    priority: str = "normal",
-    parent_id: Optional[str] = None,
-    metadata: Optional[dict] = None,
-    status: str = "PENDING",
-    signature: str = "",
-    client_ts: str = "",
-) -> dict:
-    message_id = str(uuid.uuid4())
-    now = _now()
-    decided_at = now if status == "APPROVED" else None
-    decided_by = sender if status == "APPROVED" else None
-    conn.execute(
-        """INSERT INTO messages
-           (message_id, channel, sender, recipients, subject, body, priority,
-            status, submitted_at, decided_at, decided_by, parent_id, metadata,
-            signature, client_ts)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            message_id,
-            channel,
-            sender,
-            recipients,
-            subject,
-            body,
-            priority,
-            status,
-            now,
-            decided_at,
-            decided_by,
-            parent_id,
-            canonical_metadata_json(metadata),
-            signature,
-            client_ts,
-        ),
-    )
-    conn.commit()
-    touch_agent(conn, sender)
-    return {"message_id": message_id, "status": status, "submitted_at": now}
-
-
-def get_message(conn: sqlite3.Connection, message_id: str) -> Optional[dict]:
-    cur = conn.execute("SELECT * FROM messages WHERE message_id = ?", (message_id,))
-    row = cur.fetchone()
-    if not row:
-        return None
-    return _row_to_dict(row)
-
-
-def list_messages(
-    conn: sqlite3.Connection,
-    *,
-    status: Optional[str] = None,
-    channel: Optional[str] = None,
-    recipient: Optional[str] = None,
-    since: Optional[str] = None,
-    limit: int = 50,
-    exclude_acked: bool = False,
-) -> list[dict]:
-    clauses = []
-    params: list = []
-
-    if status:
-        clauses.append("status = ?")
-        params.append(status)
-    if channel:
-        clauses.append("channel = ?")
-        params.append(channel)
-    if recipient:
-        clauses.append(
-            "(recipients = '*' OR recipients = ? "
-            "OR recipients LIKE ? "
-            "OR recipients LIKE ? "
-            "OR recipients LIKE ?)"
-        )
-        params.extend(
-            [
-                recipient,  # exact single recipient
-                f"{recipient},%",  # first in list
-                f"%,{recipient},%",  # middle of list
-                f"%,{recipient}",  # last in list
-            ]
-        )
-    if since:
-        clauses.append("submitted_at > ?")
-        params.append(since)
-    if exclude_acked and recipient:
-        clauses.append(
-            "NOT EXISTS (SELECT 1 FROM message_receipts r "
-            "WHERE r.message_id = messages.message_id "
-            "AND r.recipient = ? AND r.acked_at IS NOT NULL)"
-        )
-        params.append(recipient)
-
-    where = " AND ".join(clauses) if clauses else "1=1"
-    cur = conn.execute(
-        f"SELECT * FROM messages WHERE {where} ORDER BY submitted_at DESC LIMIT ?",
-        params + [limit],
-    )
-    return [_row_to_dict(row) for row in cur.fetchall()]
-
-
-def approve_message(
-    conn: sqlite3.Connection, message_id: str, agent_id: str, note: str = ""
-) -> Optional[dict]:
-    now = _now()
-    cur = conn.execute(
-        """UPDATE messages SET status = 'APPROVED', decided_at = ?,
-           decided_by = ?, decision_note = ?
-           WHERE message_id = ? AND status = 'PENDING'""",
-        (now, agent_id, note, message_id),
-    )
-    conn.commit()
-    if cur.rowcount == 0:
-        return None
-    touch_agent(conn, agent_id)
-    return get_message(conn, message_id)
-
-
-def reject_message(
-    conn: sqlite3.Connection, message_id: str, agent_id: str, reason: str = ""
-) -> Optional[dict]:
-    now = _now()
-    cur = conn.execute(
-        """UPDATE messages SET status = 'REJECTED', decided_at = ?,
-           decided_by = ?, decision_note = ?
-           WHERE message_id = ? AND status = 'PENDING'""",
-        (now, agent_id, reason, message_id),
-    )
-    conn.commit()
-    if cur.rowcount == 0:
-        return None
-    touch_agent(conn, agent_id)
-    return get_message(conn, message_id)
-
-
-def ack_message(conn: sqlite3.Connection, message_id: str, agent_id: str) -> Optional[dict]:
-    """Record per-recipient acknowledgement via message_receipts."""
-    msg = get_message(conn, message_id)
-    if not can_agent_ack_message(msg or {}, agent_id):
-        return None
-    now = _now()
-    conn.execute(
-        """INSERT INTO message_receipts (message_id, recipient, acked_at)
-           VALUES (?, ?, ?)
-           ON CONFLICT(message_id, recipient) DO NOTHING""",
-        (message_id, agent_id, now),
-    )
-    conn.commit()
-    touch_agent(conn, agent_id)
-    receipt = conn.execute(
-        "SELECT acked_at FROM message_receipts WHERE message_id = ? AND recipient = ?",
-        (message_id, agent_id),
-    ).fetchone()
-    result = get_message(conn, message_id)
-    if result and receipt:
-        result["acked_by"] = agent_id
-        result["acked_at"] = receipt["acked_at"]
-    return result
-
-
-def get_receipts(conn: sqlite3.Connection, message_id: str) -> list[dict]:
-    cur = conn.execute(
-        "SELECT * FROM message_receipts WHERE message_id = ? ORDER BY acked_at",
-        (message_id,),
-    )
-    return [dict(row) for row in cur.fetchall()]
-
-
-def list_replies(conn: sqlite3.Connection, parent_id: str) -> list[dict]:
-    cur = conn.execute(
-        "SELECT * FROM messages WHERE parent_id = ? ORDER BY submitted_at ASC",
-        (parent_id,),
-    )
-    return [_row_to_dict(row) for row in cur.fetchall()]
+def get_agent(conn: sqlite3.Connection, agent_id: str) -> Optional[dict]:
+    cur = conn.execute("SELECT * FROM agents WHERE agent_id = ?", (agent_id,))
+    return _row_to_dict(cur.fetchone())
 
 
 def list_agents(conn: sqlite3.Connection) -> list[dict]:
@@ -473,22 +700,119 @@ def list_agents(conn: sqlite3.Connection) -> list[dict]:
     return [dict(row) for row in cur.fetchall()]
 
 
-def list_channels(conn: sqlite3.Connection) -> list[dict]:
-    cur = conn.execute("""SELECT channel,
-                  COUNT(*) as total,
-                  SUM(CASE WHEN status='PENDING' THEN 1 ELSE 0 END) as pending,
-                  SUM(CASE WHEN status='APPROVED' THEN 1 ELSE 0 END) as approved,
-                  SUM(CASE WHEN status='REJECTED' THEN 1 ELSE 0 END) as rejected
-           FROM messages GROUP BY channel ORDER BY MAX(submitted_at) DESC""")
-    return [dict(row) for row in cur.fetchall()]
+# ---------------------------------------------------------------------------
+# HMAC signing primitives (preserved from v1)
+# ---------------------------------------------------------------------------
 
 
-def _row_to_dict(row: sqlite3.Row) -> dict:
-    d = dict(row)
-    if "metadata" in d and isinstance(d["metadata"], str):
-        try:
-            d["metadata"] = json.loads(d["metadata"])
-        except (json.JSONDecodeError, TypeError):
-            d["metadata"] = {}
-    d.pop("id", None)
-    return d
+def canonical_metadata_json(metadata: Optional[dict]) -> str:
+    """Serialize metadata deterministically for signing and persistence."""
+    return json.dumps(metadata or {}, sort_keys=True, separators=(",", ":"))
+
+
+def compute_signature(secret: str, *fields: str) -> str:
+    """Compute HMAC-SHA256 over pipe-delimited fields.
+
+    Every signature builder prefixes the action name as the first field so
+    cross-action signature reuse is impossible.
+    """
+    canonical = "|".join(fields)
+    return hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+
+
+def check_timestamp_freshness(client_ts: str) -> bool:
+    """Reject timestamps outside the replay window."""
+    try:
+        ts = datetime.fromisoformat(client_ts.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return False
+    now = datetime.now(timezone.utc)
+    return abs(now - ts) <= _REPLAY_WINDOW
+
+
+# ---------------------------------------------------------------------------
+# v2 signature builders
+# ---------------------------------------------------------------------------
+
+
+def build_create_session_signature_fields(
+    *, sender: str, timestamp: str, problem_text: str
+) -> tuple[str, ...]:
+    return ("create_session", sender, timestamp, problem_text)
+
+
+def build_nudge_signature_fields(
+    *,
+    sender: str,
+    iteration_id: str,
+    timestamp: str,
+    action: str,
+    nudge_text: Optional[str],
+) -> tuple[str, ...]:
+    return ("nudge", sender, iteration_id, timestamp, action, _optional_text(nudge_text))
+
+
+def build_emit_response_signature_fields(
+    *,
+    agent_id: str,
+    iteration_id: str,
+    timestamp: str,
+    output: str,
+    self_assessment: str,
+    rationale: Optional[str],
+) -> tuple[str, ...]:
+    return (
+        "emit_response",
+        agent_id,
+        iteration_id,
+        timestamp,
+        output,
+        self_assessment,
+        _optional_text(rationale),
+    )
+
+
+def build_emit_review_signature_fields(
+    *,
+    agent_id: str,
+    round_id: str,
+    timestamp: str,
+    decision: str,
+    comments: Optional[str],
+    rationale: Optional[str],
+) -> tuple[str, ...]:
+    return (
+        "emit_review",
+        agent_id,
+        round_id,
+        timestamp,
+        decision,
+        _optional_text(comments),
+        _optional_text(rationale),
+    )
+
+
+def build_executor_emit_signature_fields(
+    *,
+    agent_id: str,
+    iteration_id: str,
+    timestamp: str,
+    success: bool,
+    output: str,
+    error: Optional[str],
+) -> tuple[str, ...]:
+    return (
+        "executor_emit",
+        agent_id,
+        iteration_id,
+        timestamp,
+        _bool_text(success),
+        output,
+        _optional_text(error),
+    )
+
+
+def build_abort_signature_fields(
+    *, sender: str, session_id: str, timestamp: str
+) -> tuple[str, ...]:
+    return ("abort", sender, session_id, timestamp)
