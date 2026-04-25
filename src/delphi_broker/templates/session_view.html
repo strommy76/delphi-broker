@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Session — Delphi{% endblock %}
+{% block content %}
+<h1>Session</h1>
+<div class="card">
+  <div class="card-header">
+    <strong>Status</strong>
+    <span class="badge badge-{{ 'approved' if session.status == 'complete' else ('rejected' if session.status in ('aborted','escalated') else 'pending') }}">{{ session.status }}</span>
+  </div>
+  <div class="card-meta">ID: <code>{{ session.id }}</code> — created {{ session.created_at }}</div>
+  <details>
+    <summary class="card-meta">Problem</summary>
+    <div class="card-body-full"><pre>{{ session.problem_text }}</pre></div>
+  </details>
+</div>
+
+{% if pending %}
+<div class="card card-urgent">
+  <div class="card-header">
+    <strong>Pending nudge</strong>
+    <span class="badge badge-pending">awaiting_nudge</span>
+  </div>
+  <div class="card-meta">
+    Source: {{ pending.source_agent or 'operator' }} → Destination: <strong>{{ pending.destination_agent }}</strong>
+  </div>
+  <details>
+    <summary class="card-meta">Source output (tap to expand)</summary>
+    <div class="card-body-full"><pre>{{ pending.source_output }}</pre></div>
+  </details>
+  <form method="post" action="/web/session/{{ session.id }}/nudge">
+    <input type="hidden" name="iteration_id" value="{{ pending.id }}">
+    <textarea name="nudge_text" rows="3" placeholder="Optional nudge to bias the destination agent" required></textarea>
+    <div class="actions">
+      <button type="submit" class="btn btn-approve">Submit & Continue</button>
+    </div>
+  </form>
+  <form method="post" action="/web/session/{{ session.id }}/skip" style="margin-top:8px;">
+    <input type="hidden" name="iteration_id" value="{{ pending.id }}">
+    <div class="actions">
+      <button type="submit" class="btn">Skip</button>
+    </div>
+  </form>
+</div>
+{% else %}
+<p class="empty">No pending nudge — agents are working or the session is idle.</p>
+{% endif %}
+
+<div class="actions">
+  <a class="btn" href="/web/session/{{ session.id }}/transcript">Transcript</a>
+  {% if session.status == 'escalated' %}
+    <a class="btn btn-reject" href="/web/session/{{ session.id }}/escalation">Resolve escalation</a>
+  {% endif %}
+  <form method="post" action="/web/session/{{ session.id }}/abort">
+    <button type="submit" class="btn btn-reject">Abort</button>
+  </form>
+</div>
+
+<h2 style="margin-top:16px;">Rounds</h2>
+{% for r in rounds %}
+  <div class="card">
+    <div class="card-header">
+      <strong>R{{ r.round_num }} — {{ r.round_type }}{% if r.host %} @{{ r.host }}{% endif %}</strong>
+      <span class="badge badge-{{ 'approved' if r.status in ('converged','complete') else ('rejected' if r.status in ('aborted','escalated') else 'pending') }}">{{ r.status }}</span>
+    </div>
+  </div>
+{% else %}
+  <p class="empty">No rounds yet.</p>
+{% endfor %}
+
+<script>
+// Phone-friendly polling: every 5 seconds check if a new transition appeared.
+// If the server reports a transition while we have none displayed, reload to pick it up.
+(function() {
+  const sessionId = {{ session.id | tojson }};
+  const haveLocal = {{ 'true' if pending else 'false' }};
+  setInterval(async function() {
+    try {
+      const r = await fetch('/api/v1/session/' + sessionId + '/pending', {
+        credentials: 'include',
+        headers: {'X-Operator-Token': document.cookie.split('op_token=')[1]?.split(';')[0] || ''}
+      });
+      if (r.status === 204) return;
+      if (!r.ok) return;
+      const data = await r.json();
+      if (data.transition && !haveLocal) {
+        location.reload();
+      }
+    } catch (e) { /* network blip; ignore */ }
+  }, 5000);
+})();
+</script>
+{% endblock %}

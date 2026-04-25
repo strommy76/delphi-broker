@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Sessions — Delphi{% endblock %}
+{% block content %}
+<h1>Sessions</h1>
+<div class="actions">
+  <a class="btn btn-approve" href="/web/sessions/new">New session</a>
+</div>
+{% if not sessions %}
+  <p class="empty">No sessions yet. Tap "New session" to begin.</p>
+{% else %}
+  {% for s in sessions %}
+    <div class="card">
+      <div class="card-header">
+        <a href="/web/session/{{ s.id }}"><strong>{{ s.problem_text[:80] }}{% if s.problem_text|length > 80 %}…{% endif %}</strong></a>
+        <span class="badge badge-{{ 'approved' if s.status == 'complete' else ('rejected' if s.status in ('aborted','escalated') else 'pending') }}">{{ s.status }}</span>
+      </div>
+      <div class="card-meta">
+        Created {{ s.created_at }}
+      </div>
+    </div>
+  {% endfor %}
+{% endif %}
+{% endblock %}

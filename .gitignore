@@ -10,6 +10,7 @@ venv/
 env/
 .env
 config/agents.json
+config/agents-secrets.json
 *.db
 .claude/
 node_modules/

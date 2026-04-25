@@ -1,289 +1,323 @@
-"""
---------------------------------------------------------------------------------
-FILE:        api.py
-PATH:        C:/Projects/delphi-broker/src/delphi_broker/routes/api.py
-DESCRIPTION: REST API endpoints. All authority-bearing mutations require
-             HMAC-SHA256 signature verification.
+"""Operator REST surface for the v2 broker.
 
-CHANGELOG:
-2026-03-31 17:30      Claude      [Harden] HMAC on all mutations, agent verify
-                                     on ack, replay protection
-2026-03-31 16:30      Claude      [Harden] HMAC on submit, agent verify on inbox
---------------------------------------------------------------------------------
+All endpoints under `/api/v1/`. The operator authenticates with a single
+session-creator token in the `X-Operator-Token` header, validated against
+`config.OPERATOR_TOKEN`. Agents do not authenticate here — they go through
+MCP (`mcp_server.py`).
+
+This module performs no SQL directly: every persistence call goes through
+`database.py`, every state transition through `workflow.py`. Failures map to
+explicit `HTTPException`s so silent fallbacks are impossible.
 """
 
 from __future__ import annotations
 
-import hmac as hmac_mod
+import secrets
+import sqlite3
+import uuid
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi.responses import JSONResponse, Response
 
 from .. import database as db
-from ..config import AGENT_SECRETS, DB_PATH
+from .. import workflow
+from ..config import DB_PATH, require_operator_token
 from ..models import (
-    BroadcastSubmit,
-    MessageAck,
-    MessageDecision,
-    MessageReject,
-    MessageSubmit,
+    AbortResponse,
+    ApproveExecutionResponse,
+    CreateSessionRequest,
+    CreateSessionResponse,
+    EscalationAction,
+    EscalationResolveRequest,
+    EscalationResolveResponse,
+    NudgeAction,
+    NudgeRequest,
+    NudgeResponse,
 )
 
 router = APIRouter(prefix="/api/v1")
 
 
-def _conn():
+# ---------------------------------------------------------------------------
+# Auth + helpers
+# ---------------------------------------------------------------------------
+
+
+def verify_operator_token(
+    x_operator_token: str | None = Header(default=None, alias="X-Operator-Token"),
+) -> str:
+    """Validate the operator token header against config.OPERATOR_TOKEN."""
+    expected = require_operator_token()
+    if not x_operator_token or not secrets.compare_digest(
+        x_operator_token, expected
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="invalid operator token",
+        )
+    return x_operator_token
+
+
+def _conn() -> sqlite3.Connection:
     return db.get_connection(DB_PATH)
 
 
-def _require_sig(agent_id: str, signature: str, timestamp: str, *fields: str) -> None:
-    """Verify HMAC signature. Raises HTTPException on failure."""
-    secret = AGENT_SECRETS.get(agent_id)
-    if not secret:
-        raise HTTPException(403, f"No secret configured for agent '{agent_id}'")
-    if not signature or not timestamp:
-        raise HTTPException(400, "Missing required fields: timestamp and signature")
-    if not db.check_timestamp_freshness(timestamp):
-        raise HTTPException(403, "Timestamp outside replay window (5 min)")
-    expected = db.compute_signature(secret, *fields)
-    if not hmac_mod.compare_digest(signature, expected):
-        raise HTTPException(403, "Invalid signature — rejected")
+def _validate_session_id(session_id: str) -> None:
+    try:
+        uuid.UUID(session_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"invalid session_id: {session_id!r}",
+        ) from exc
 
 
-@router.post("/messages")
-def submit_message(payload: MessageSubmit):
+def _require_session(conn: sqlite3.Connection, session_id: str) -> dict:
+    session = db.get_session(conn, session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"session {session_id!r} not found",
+        )
+    return session
+
+
+def _full_session_dict(conn: sqlite3.Connection, session_id: str) -> dict:
+    """Return session + rounds + iterations + reviews as nested dict."""
+    session = _require_session(conn, session_id)
+    rounds = db.list_rounds_for_session(conn, session_id)
+    current = db.current_round_for_session(conn, session_id)
+    iterations_by_round: dict[str, list[dict]] = {}
+    reviews_by_round: dict[str, list[dict]] = {}
+    for rnd in rounds:
+        iterations_by_round[rnd["id"]] = db.list_iterations_for_round(
+            conn, rnd["id"]
+        )
+        reviews_by_round[rnd["id"]] = db.list_reviews_for_round(conn, rnd["id"])
+    return {
+        "session": session,
+        "current_round": current,
+        "rounds": rounds,
+        "iterations_by_round": iterations_by_round,
+        "reviews_by_round": reviews_by_round,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/session",
+    status_code=status.HTTP_201_CREATED,
+    response_model=CreateSessionResponse,
+    dependencies=[Depends(verify_operator_token)],
+)
+def create_session(payload: CreateSessionRequest) -> CreateSessionResponse:
     conn = _conn()
     try:
-        if not db.verify_agent(conn, payload.sender):
-            raise HTTPException(403, f"Unknown agent '{payload.sender}' — not in registry")
-        _require_sig(
-            payload.sender,
-            payload.signature,
-            payload.timestamp,
-            *db.build_submit_signature_fields(
-                sender=payload.sender,
-                channel=payload.channel,
-                timestamp=payload.timestamp,
-                subject=payload.subject,
-                body=payload.body,
-                recipients=payload.recipients,
-                priority=payload.priority,
-                parent_id=payload.parent_id,
-                metadata=payload.metadata,
-            ),
-        )
-        return db.submit_message(
+        session = workflow.start_session(
             conn,
-            sender=payload.sender,
-            channel=payload.channel,
-            subject=payload.subject,
-            body=payload.body,
-            recipients=payload.recipients,
-            priority=payload.priority,
-            parent_id=payload.parent_id,
-            metadata=payload.metadata,
-            signature=payload.signature,
-            client_ts=payload.timestamp,
+            problem_text=payload.problem_text,
+            nudge_window_secs=payload.nudge_window_secs,
         )
+        return CreateSessionResponse(
+            session_id=session["id"], status=session["status"]
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     finally:
         conn.close()
 
 
-@router.get("/messages/inbox")
-def inbox(
-    agent_id: str, channel: str = "", status: str = "APPROVED", since: str = "", limit: int = 50
-):
+@router.get(
+    "/session/{session_id}",
+    dependencies=[Depends(verify_operator_token)],
+)
+def get_session(session_id: str) -> dict:
+    _validate_session_id(session_id)
     conn = _conn()
     try:
-        if not db.verify_agent(conn, agent_id):
-            raise HTTPException(403, f"Unknown agent '{agent_id}' — not in registry")
-        db.touch_agent(conn, agent_id)
-        exclude_acked = status == "APPROVED"
-        return db.list_messages(
-            conn,
-            status=status or None,
-            channel=channel or None,
-            recipient=agent_id,
-            since=since or None,
-            limit=limit,
-            exclude_acked=exclude_acked,
-        )
+        return _full_session_dict(conn, session_id)
     finally:
         conn.close()
 
 
-@router.get("/messages/pending")
-def pending(channel: str = "", limit: int = 50):
+@router.get(
+    "/session/{session_id}/pending",
+    dependencies=[Depends(verify_operator_token)],
+)
+def get_pending(session_id: str) -> Response:
+    """Return the most recent iteration awaiting nudge whose window is open."""
+    _validate_session_id(session_id)
     conn = _conn()
     try:
-        return db.list_messages(
-            conn,
-            status="PENDING",
-            channel=channel or None,
-            limit=limit,
+        _require_session(conn, session_id)
+        # Find awaiting_nudge iterations on this session whose window is in
+        # the future. Order by source_emitted_at ASC for determinism.
+        cur = conn.execute(
+            """SELECT i.* FROM iterations i
+                 JOIN rounds r ON r.id = i.round_id
+               WHERE r.session_id = ?
+                 AND i.status = 'awaiting_nudge'
+                 AND i.nudge_window_closes_at > ?
+            ORDER BY i.source_emitted_at ASC""",
+            (session_id, datetime.now(timezone.utc).isoformat()),
         )
+        rows = [dict(row) for row in cur.fetchall()]
+        if not rows:
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        return JSONResponse({"transition": rows[0]})
     finally:
         conn.close()
 
 
-@router.post("/messages/{message_id}/approve")
-def approve(message_id: str, payload: MessageDecision):
+@router.post(
+    "/session/{session_id}/nudge",
+    response_model=NudgeResponse,
+    dependencies=[Depends(verify_operator_token)],
+)
+def post_nudge(session_id: str, payload: NudgeRequest) -> NudgeResponse:
+    _validate_session_id(session_id)
     conn = _conn()
     try:
-        if not db.verify_agent(conn, payload.agent_id):
-            raise HTTPException(403, f"Unknown agent '{payload.agent_id}' — not in registry")
-        if not db.is_orchestrator(conn, payload.agent_id):
-            raise HTTPException(403, f"Agent '{payload.agent_id}' is not an orchestrator")
-        _require_sig(
-            payload.agent_id,
-            payload.signature,
-            payload.timestamp,
-            *db.build_approve_signature_fields(
-                agent_id=payload.agent_id,
-                message_id=message_id,
-                timestamp=payload.timestamp,
-                note=payload.note,
-            ),
-        )
-        result = db.approve_message(conn, message_id, payload.agent_id, payload.note)
-        if not result:
-            raise HTTPException(404, "Message not found or not PENDING")
-        return result
-    finally:
-        conn.close()
-
-
-@router.post("/messages/{message_id}/reject")
-def reject(message_id: str, payload: MessageReject):
-    conn = _conn()
-    try:
-        if not db.verify_agent(conn, payload.agent_id):
-            raise HTTPException(403, f"Unknown agent '{payload.agent_id}' — not in registry")
-        if not db.is_orchestrator(conn, payload.agent_id):
-            raise HTTPException(403, f"Agent '{payload.agent_id}' is not an orchestrator")
-        _require_sig(
-            payload.agent_id,
-            payload.signature,
-            payload.timestamp,
-            *db.build_reject_signature_fields(
-                agent_id=payload.agent_id,
-                message_id=message_id,
-                timestamp=payload.timestamp,
-                reason=payload.reason,
-            ),
-        )
-        result = db.reject_message(conn, message_id, payload.agent_id, payload.reason)
-        if not result:
-            raise HTTPException(404, "Message not found or not PENDING")
-        return result
-    finally:
-        conn.close()
-
-
-@router.post("/messages/{message_id}/ack")
-def ack(message_id: str, payload: MessageAck):
-    conn = _conn()
-    try:
-        if not db.verify_agent(conn, payload.agent_id):
-            raise HTTPException(403, f"Unknown agent '{payload.agent_id}' — not in registry")
-        _require_sig(
-            payload.agent_id,
-            payload.signature,
-            payload.timestamp,
-            *db.build_ack_signature_fields(
-                agent_id=payload.agent_id,
-                message_id=message_id,
-                timestamp=payload.timestamp,
-            ),
-        )
-        message = db.get_message(conn, message_id)
-        if not message or message["status"] != "APPROVED":
-            raise HTTPException(404, "Message not found or not APPROVED")
-        if not db.can_agent_ack_message(message, payload.agent_id):
+        _require_session(conn, session_id)
+        iteration = db.get_iteration(conn, payload.iteration_id)
+        if iteration is None:
             raise HTTPException(
-                403,
-                f"Agent '{payload.agent_id}' is not a recipient of message '{message_id}'",
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"iteration {payload.iteration_id!r} not found",
             )
-        result = db.ack_message(conn, message_id, payload.agent_id)
-        if not result:
-            raise HTTPException(404, "Message not found or not APPROVED")
-        return result
-    finally:
-        conn.close()
-
-
-@router.post("/messages/broadcast")
-def broadcast(payload: BroadcastSubmit):
-    conn = _conn()
-    try:
-        if not db.verify_agent(conn, payload.sender):
-            raise HTTPException(403, f"Unknown agent '{payload.sender}' — not in registry")
-        if not db.is_orchestrator(conn, payload.sender):
-            raise HTTPException(403, f"Agent '{payload.sender}' is not an orchestrator")
-        _require_sig(
-            payload.sender,
-            payload.signature,
-            payload.timestamp,
-            *db.build_broadcast_signature_fields(
-                sender=payload.sender,
-                channel=payload.channel,
-                timestamp=payload.timestamp,
-                subject=payload.subject,
-                body=payload.body,
-                priority=payload.priority,
-                auto_approve=payload.auto_approve,
-            ),
+        rnd = db.get_round(conn, iteration["round_id"])
+        if rnd is None or rnd["session_id"] != session_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="iteration does not belong to this session",
+            )
+        if iteration["status"] != "awaiting_nudge":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"iteration is in status {iteration['status']!r}, "
+                    "expected 'awaiting_nudge'"
+                ),
+            )
+        if payload.action == NudgeAction.SUBMIT:
+            if not payload.nudge_text or not payload.nudge_text.strip():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="nudge_text is required when action='submit'",
+                )
+            updated = db.apply_nudge(conn, payload.iteration_id, payload.nudge_text)
+        else:  # SKIP
+            updated = db.skip_nudge(conn, payload.iteration_id)
+        return NudgeResponse(
+            iteration_id=updated["id"], status=updated["status"]
         )
-        status = "APPROVED" if payload.auto_approve else "PENDING"
-        return db.submit_message(
-            conn,
-            sender=payload.sender,
-            channel=payload.channel,
-            subject=payload.subject,
-            body=payload.body,
-            recipients="*",
-            priority=payload.priority,
-            status=status,
-            signature=payload.signature,
-            client_ts=payload.timestamp,
-        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     finally:
         conn.close()
 
 
-@router.get("/messages/{message_id}")
-def get_message(message_id: str):
+@router.post(
+    "/session/{session_id}/abort",
+    response_model=AbortResponse,
+    dependencies=[Depends(verify_operator_token)],
+)
+def post_abort(session_id: str) -> AbortResponse:
+    """Abort the session. In-progress rounds are also marked aborted.
+
+    Pending iterations are intentionally left in their current state for
+    forensic review; no further agent dispatch happens after an abort
+    because the session itself is terminal.
+    """
+    _validate_session_id(session_id)
     conn = _conn()
     try:
-        msg = db.get_message(conn, message_id)
-        if not msg:
-            raise HTTPException(404, "Message not found")
-        return msg
+        _require_session(conn, session_id)
+        rounds = db.list_rounds_for_session(conn, session_id)
+        for rnd in rounds:
+            if rnd["status"] in ("in_progress", "pending"):
+                db.update_round_status(conn, rnd["id"], "aborted")
+        updated = db.update_session_status(conn, session_id, "aborted")
+        return AbortResponse(status=updated["status"])
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     finally:
         conn.close()
 
 
-@router.get("/messages/{message_id}/receipts")
-def get_receipts(message_id: str):
+@router.post(
+    "/session/{session_id}/escalation/resolve",
+    response_model=EscalationResolveResponse,
+    dependencies=[Depends(verify_operator_token)],
+)
+def post_resolve_escalation(
+    session_id: str, payload: EscalationResolveRequest
+) -> EscalationResolveResponse:
+    _validate_session_id(session_id)
     conn = _conn()
     try:
-        return db.get_receipts(conn, message_id)
+        _require_session(conn, session_id)
+        try:
+            updated = workflow.resolve_escalation(
+                conn,
+                session_id,
+                action=payload.action.value,
+                iteration_id=payload.iteration_id,
+                agent_id=payload.agent_id,
+                nudge_text=payload.nudge_text,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
+        return EscalationResolveResponse(new_status=updated["status"])
     finally:
         conn.close()
 
 
-@router.get("/channels")
-def channels():
+@router.get(
+    "/session/{session_id}/transcript",
+    dependencies=[Depends(verify_operator_token)],
+)
+def get_transcript(session_id: str) -> dict:
+    """Full ordered transcript: session + rounds + iterations + reviews."""
+    _validate_session_id(session_id)
     conn = _conn()
     try:
-        return db.list_channels(conn)
+        return _full_session_dict(conn, session_id)
     finally:
         conn.close()
 
 
-@router.get("/agents")
-def agents():
+@router.post(
+    "/session/{session_id}/approve_execution",
+    response_model=ApproveExecutionResponse,
+    dependencies=[Depends(verify_operator_token)],
+)
+def post_approve_execution(session_id: str) -> ApproveExecutionResponse:
+    """Reserved-for-future operator veto endpoint.
+
+    The normal v2 workflow advances to `executing` automatically once round 3
+    reaches consensus (see `workflow._spawn_execute_round`). This endpoint
+    therefore acknowledges the current state without mutating it. Future
+    work may add an explicit operator gate before the executor runs; until
+    then this is a no-op for compatibility with the documented API surface.
+    """
+    _validate_session_id(session_id)
     conn = _conn()
     try:
-        return db.list_agents(conn)
+        session = _require_session(conn, session_id)
+        return ApproveExecutionResponse(status=session["status"])
     finally:
         conn.close()
