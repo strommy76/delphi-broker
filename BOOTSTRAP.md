@@ -38,7 +38,7 @@ You need these pieces of information from your operator before starting:
 |-----------|---------|----------------|
 | `AGENT_ID` | `dev-codex` | Assigned by operator |
 | `ROLE` | `worker` | Assigned by operator (`worker`, `arbitrator`, or `executor`) |
-| `BROKER_IP` | `100.80.8.34` or `localhost` | `localhost` if you're on the broker host, Tailscale IP otherwise |
+| `BROKER_IP` | `100.81.33.20` or `localhost` | `localhost` if you're on the broker host, Tailscale IP otherwise |
 
 ---
 
@@ -46,9 +46,17 @@ You need these pieces of information from your operator before starting:
 
 | Host | Tailscale IP | Agents | Notes |
 |------|-------------|--------|-------|
-| Nucbox (desktop-vc94kou) | `100.80.8.34` | `dev-codex`, `dev-claude`, `dev-codex-executor` | **Broker host** — use `localhost` |
-| Alienware (bsalien) | `100.67.243.54` | `prod-codex`, `prod-claude` | Remote — use `100.80.8.34` |
-| BSFlow | `100.89.34.67` | `flow-claude` | Remote — use `100.80.8.34` |
+| **BSPiLHX (Pi 5)** | **`100.81.33.20`** | `pi-claude` | **Broker host** — use `localhost` |
+| Nucbox (desktop-vc94kou) | `100.80.8.34` | `dev-codex`, `dev-claude`, `dev-codex-executor` | Remote — use `100.81.33.20` |
+| Alienware (bsalien) | `100.67.243.54` | `prod-codex`, `prod-claude` | Remote — use `100.81.33.20` |
+| BSFlow | `100.89.34.67` | `bsflow-claude` | Remote — use `100.81.33.20` |
+
+> ⚠️ **Historical note:** earlier drafts of this doc had Nucbox as the broker host
+> (per the v2 design's `100.80.8.34` reference). The deployment moved to Pi for
+> 24/7 availability — the broker is now on `100.81.33.20`. If your local
+> `~/.claude.json` (or Codex equivalent) was created via `claude mcp add`
+> against the older table, it has the stale Nucbox URL baked in. Remove and
+> re-add the MCP server with the Pi URL.
 
 ---
 
