@@ -22,15 +22,40 @@ from __future__ import annotations
 
 import hmac
 import sqlite3
+import os
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from . import database as db
 from . import workflow
 from .config import AGENT_SECRETS, ARBITRATOR_AGENT_ID, DB_PATH, EXECUTOR_AGENT_ID
 
-mcp = FastMCP("delphi-broker")
+# DNS-rebinding protection in FastMCP defaults to localhost-only, which
+# blocks every agent reaching us over Tailscale (Host header = the broker's
+# tailnet IP). The HMAC + Tailscale-mesh boundary already authenticates
+# agents, so we allow all hosts by default; override via env if you want
+# stricter isolation.
+_allowed_hosts_env = os.getenv("DELPHI_ALLOWED_HOSTS", "*").strip()
+_allowed_hosts = (
+    ["*"] if _allowed_hosts_env == "*"
+    else [h.strip() for h in _allowed_hosts_env.split(",") if h.strip()]
+)
+_allowed_origins_env = os.getenv("DELPHI_ALLOWED_ORIGINS", "*").strip()
+_allowed_origins = (
+    ["*"] if _allowed_origins_env == "*"
+    else [o.strip() for o in _allowed_origins_env.split(",") if o.strip()]
+)
+
+mcp = FastMCP(
+    "delphi-broker",
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=(_allowed_hosts != ["*"]),
+        allowed_hosts=_allowed_hosts,
+        allowed_origins=_allowed_origins,
+    ),
+)
 
 
 # ---------------------------------------------------------------------------
