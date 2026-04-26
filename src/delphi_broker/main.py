@@ -48,22 +48,30 @@ async def _nudge_sweep_loop() -> None:
             logger.exception("nudge sweep iteration failed")
 
 
+# MCP server (JSON-RPC over HTTP). Build the sub-app once so its session
+# manager can be started inside our lifespan.
+mcp_app = mcp.streamable_http_app()
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     # Ensure DB is initialised once at startup.
     conn = db.get_connection(DB_PATH)
     db.init_db(conn)
     conn.close()
-    # Spawn the background sweep task.
-    sweep_task = asyncio.create_task(_nudge_sweep_loop(), name="nudge-sweep")
-    try:
-        yield
-    finally:
-        sweep_task.cancel()
+    # Start the FastMCP session manager. Without this, every /mcp request
+    # raises "Task group is not initialized. Make sure to use run()."
+    async with mcp.session_manager.run():
+        # Spawn the background sweep task.
+        sweep_task = asyncio.create_task(_nudge_sweep_loop(), name="nudge-sweep")
         try:
-            await sweep_task
-        except asyncio.CancelledError:
-            pass
+            yield
+        finally:
+            sweep_task.cancel()
+            try:
+                await sweep_task
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(title="Delphi Broker", version="0.2.0", lifespan=lifespan)
@@ -76,9 +84,10 @@ app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 app.include_router(api_router)
 app.include_router(web_router)
 
-# MCP server (JSON-RPC over HTTP).
-mcp_app = mcp.streamable_http_app()
-app.mount("/mcp", mcp_app)
+# Mount the MCP sub-app. streamable_http_app exposes its routes at /mcp
+# internally, so mounting at "" keeps the public path /mcp (rather than
+# the original buggy /mcp/mcp double-mount).
+app.mount("", mcp_app)
 
 
 def run() -> None:
