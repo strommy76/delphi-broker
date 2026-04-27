@@ -24,6 +24,7 @@ from .config import DB_PATH, HOST, PORT
 from .mcp_server import mcp
 from .routes.api import router as api_router
 from .routes.web import router as web_router
+from .v3 import database as v3db
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +56,11 @@ mcp_app = mcp.streamable_http_app()
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    # Ensure DB is initialised once at startup.
+    # Ensure DB is initialised once at startup. v2 schema first, then v3
+    # tables alongside (idempotent).
     conn = db.get_connection(DB_PATH)
     db.init_db(conn)
+    v3db.init_v3_schema(conn)
     conn.close()
     # Start the FastMCP session manager. Without this, every /mcp request
     # raises "Task group is not initialized. Make sure to use run()."

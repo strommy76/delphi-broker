@@ -57,6 +57,14 @@ mcp = FastMCP(
     ),
 )
 
+# Phase-1 push spike: register four test tools that exercise different
+# server->client notification paths. Used to empirically validate which
+# wake-up primitives surface in Claude Code / Codex MCP clients before
+# we commit to a v3 push design. Spike tools are unauthenticated for
+# convenience -- they're informational, not state-mutating.
+from .v3.push_spike import register_spike_tools  # noqa: E402
+register_spike_tools(mcp)
+
 
 # ---------------------------------------------------------------------------
 # Verification helpers
