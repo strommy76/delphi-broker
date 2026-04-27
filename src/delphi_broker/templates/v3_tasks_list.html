@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Tasks · Delphi v3{% endblock %}
+{% block content %}
+<main class="container">
+  <h1>Tasks</h1>
+  <p class="hint">v3 — central orchestration. Pick an orchestrator and a task; they handle the rest.</p>
+  <p><a class="btn btn-primary" href="/web/v3/new">+ New task</a></p>
+
+  {% if tasks %}
+  <table class="data">
+    <thead>
+      <tr>
+        <th>Title</th>
+        <th>Status</th>
+        <th>Orchestrator</th>
+        <th>Created</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in tasks %}
+      <tr>
+        <td><a href="/web/v3/{{ t.id }}">{{ t.title }}</a></td>
+        <td><span class="status status-{{ t.status }}">{{ t.status }}</span></td>
+        <td>{{ t.orchestrator_id }}</td>
+        <td class="muted">{{ t.created_at[:19] }}</td>
+        <td>
+          {% if t.status == 'awaiting_approval' %}
+          <a href="/web/v3/{{ t.id }}" class="btn btn-primary">Review →</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No tasks yet. <a href="/web/v3/new">Create one</a> to get started.</p>
+  {% endif %}
+</main>
+{% endblock %}

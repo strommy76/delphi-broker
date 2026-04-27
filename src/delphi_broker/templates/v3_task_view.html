@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}{{ task.title }} · Delphi v3{% endblock %}
+{% block head %}
+{% if task.status not in ('complete', 'aborted') %}
+<meta http-equiv="refresh" content="5">
+{% endif %}
+{% endblock %}
+{% block content %}
+<main class="container">
+  <p><a href="/web/v3/" class="muted">&larr; Tasks</a></p>
+  <h1>{{ task.title }}</h1>
+  <p class="muted">{{ task.id }}</p>
+  <p>
+    <span class="status status-{{ task.status }}">{{ task.status }}</span>
+    · orchestrator <strong>{{ task.orchestrator_id }}</strong>
+    · created {{ task.created_at[:19] }}
+  </p>
+
+  <section>
+    <h2>Problem text</h2>
+    <pre class="block">{{ task.problem_text }}</pre>
+    {% if task.task_json %}
+    <details>
+      <summary>task_json</summary>
+      <pre class="block">{{ task.task_json }}</pre>
+    </details>
+    {% endif %}
+  </section>
+
+  {% if task.status == 'awaiting_approval' %}
+  <section class="callout">
+    <h2>Operator action</h2>
+    <p>Orchestrator says: <strong>done</strong>. Approve, refine, or abort.</p>
+    {% set last_agg = aggregations[-1] if aggregations else None %}
+    {% if last_agg %}
+    <details open><summary>Synthesis</summary><pre class="block">{{ last_agg.synthesis_text }}</pre></details>
+    {% endif %}
+    <form method="post" action="/web/v3/{{ task.id }}/approve">
+      <label>
+        <span>Final artifact (what you're approving)</span>
+        <textarea name="final_artifact" required rows="8">{{ last_agg.synthesis_text if last_agg else '' }}</textarea>
+      </label>
+      <div class="actions">
+        <button class="btn btn-primary" type="submit">Approve & complete</button>
+      </div>
+    </form>
+    <form method="post" action="/web/v3/{{ task.id }}/refine" style="margin-top:1em;">
+      <label>
+        <span>Refine — send back with comments</span>
+        <textarea name="operator_comment" required rows="4" placeholder="What needs another pass?"></textarea>
+      </label>
+      <div class="actions">
+        <button class="btn" type="submit">Refine</button>
+      </div>
+    </form>
+  </section>
+  {% endif %}
+
+  <section>
+    <h2>Dispatches ({{ dispatches|length }})</h2>
+    {% if dispatches %}
+    {% for d in dispatches %}
+    <details {% if d.status != 'done' %}open{% endif %}>
+      <summary>
+        <span class="status status-{{ d.status }}">{{ d.status }}</span>
+        <strong>{{ d.worker_id }}</strong>
+        <span class="muted">· {{ d.dispatched_at[:19] }}</span>
+      </summary>
+      <p class="muted">subtask:</p>
+      <pre class="block">{{ d.subtask_text }}</pre>
+      {% set out = outputs_by_dispatch.get(d.id) %}
+      {% if out %}
+      <p class="muted">output ({{ out.emitted_at[:19] }}):</p>
+      <pre class="block">{{ out.output_text }}</pre>
+      {% endif %}
+    </details>
+    {% endfor %}
+    {% else %}
+    <p class="muted">No dispatches yet — orchestrator hasn't started.</p>
+    {% endif %}
+  </section>
+
+  {% if aggregations %}
+  <section>
+    <h2>Aggregations ({{ aggregations|length }})</h2>
+    {% for a in aggregations %}
+    <details>
+      <summary>
+        <span class="status status-{{ a.decision }}">{{ a.decision }}</span>
+        <span class="muted">· {{ a.created_at[:19] }}</span>
+      </summary>
+      <pre class="block">{{ a.synthesis_text }}</pre>
+      {% if a.refine_directive %}
+      <p class="muted">refine_directive: {{ a.refine_directive }}</p>
+      {% endif %}
+    </details>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  {% if task.final_artifact %}
+  <section class="callout">
+    <h2>Final artifact</h2>
+    <pre class="block">{{ task.final_artifact }}</pre>
+  </section>
+  {% endif %}
+
+  {% if task.status not in ('complete', 'aborted') %}
+  <section>
+    <form method="post" action="/web/v3/{{ task.id }}/abort">
+      <label>
+        <span>Abort task</span>
+        <input type="text" name="reason" placeholder="Optional reason (logged in audit)">
+      </label>
+      <div class="actions">
+        <button class="btn btn-danger" type="submit"
+                onclick="return confirm('Abort this task? Cannot be undone.')">Abort</button>
+      </div>
+    </form>
+  </section>
+  {% endif %}
+
+  <details>
+    <summary>Audit log ({{ events|length }})</summary>
+    <table class="data">
+      <thead><tr><th>When</th><th>Event</th><th>Actor</th><th>Payload</th></tr></thead>
+      <tbody>
+      {% for e in events %}
+      <tr>
+        <td class="muted">{{ e.occurred_at[:19] }}</td>
+        <td>{{ e.event_type }}</td>
+        <td>{{ e.actor or '' }}</td>
+        <td class="muted small">{{ e.payload_json or '' }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </details>
+</main>
+{% endblock %}

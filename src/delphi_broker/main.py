@@ -25,6 +25,8 @@ from .mcp_server import mcp
 from .routes.api import router as api_router
 from .routes.web import router as web_router
 from .v3 import database as v3db
+from .v3.api import router as v3_api_router
+from .v3.web import router as v3_web_router
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +88,8 @@ app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 # REST API + web UI.
 app.include_router(api_router)
 app.include_router(web_router)
+app.include_router(v3_api_router)  # /api/v2/* — v3 task lifecycle
+app.include_router(v3_web_router)  # /web/v3/* — operator UI for v3 tasks
 
 # Mount the MCP sub-app. streamable_http_app exposes its routes at /mcp
 # internally, so mounting at "" keeps the public path /mcp (rather than
