@@ -62,6 +62,8 @@ mcp = FastMCP(
 # wake-up primitives surface in Claude Code / Codex MCP clients before
 # we commit to a v3 push design. Spike tools are unauthenticated for
 # convenience -- they're informational, not state-mutating.
+# v3 production tools (delphi_v3_*) are registered at the bottom of the
+# file, after _verify and _conn helpers are defined.
 from .v3.push_spike import register_spike_tools  # noqa: E402
 register_spike_tools(mcp)
 
@@ -378,6 +380,14 @@ def delphi_executor_emit(
         return {"ok": True, "session_status": session["status"]}
     finally:
         conn.close()
+
+
+# v3 production tools — orchestrator + worker surfaces. Registered here
+# (end of module) so that _verify, _conn, and AGENT_SECRETS are all in
+# scope. The v3 module deliberately accepts these as parameters to stay
+# decoupled from module-level state.
+from .v3.mcp_tools import register_v3_tools  # noqa: E402
+register_v3_tools(mcp, _verify, _conn, AGENT_SECRETS)
 
 
 # Re-exported for tests: sentinel constants the test suite asserts against.
