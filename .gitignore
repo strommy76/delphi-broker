@@ -12,6 +12,8 @@ env/
 config/agents.json
 config/agents-secrets.json
 *.db
+*.db-shm
+*.db-wal
 .claude/
 node_modules/
 .aider*
