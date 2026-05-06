@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Threads — Peer Transcript{% endblock %}
+{% block content %}
+<section>
+  <h1>Peer Transcript</h1>
+  <p class="hint">{{ subtitle }}</p>
+  <p class="card-meta">
+    {% if include_probes %}
+      <a href="/web/peer/threads?limit={{ limit }}&offset={{ offset }}">Hide probes</a>
+    {% else %}
+      <a href="/web/peer/threads?limit={{ limit }}&offset={{ offset }}&include_probes=true">Show probes</a>
+    {% endif %}
+  </p>
+  {% if payload.threads %}
+    {% for thread in payload.threads %}
+      <article class="card">
+        <div class="card-header">
+          <h2><a href="/web/peer/threads/{{ thread.thread_id }}{% if include_probes %}?include_probes=true{% endif %}">{{ thread.subject }}</a></h2>
+          <span class="badge badge-acked">{{ thread.status }}</span>
+        </div>
+        <p class="card-meta">{{ thread.message_count }} messages · {{ thread.last_activity_ts }}</p>
+        <p class="card-meta">{{ thread.participants | join(", ") }}</p>
+      </article>
+    {% endfor %}
+  {% else %}
+    <p class="muted">No peer threads.</p>
+  {% endif %}
+</section>
+{% endblock %}

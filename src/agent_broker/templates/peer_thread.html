@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Thread — Peer Transcript{% endblock %}
+{% block content %}
+<section>
+  <p><a href="/web/peer/threads{% if include_probes %}?include_probes=true{% endif %}" class="muted">&larr; Peer threads</a></p>
+  <h1>Peer Transcript</h1>
+  <h2>{{ payload.thread.subject }}</h2>
+  <p class="card-meta">{{ payload.thread.status }} · {{ payload.thread.created_ts }}</p>
+  {% for item in payload.messages %}
+    <article class="card">
+      <div class="card-header">
+        <strong>{{ item.message.from_participant.participant_id }}</strong>
+        <span class="badge badge-acked">{{ item.message.message_kind }}</span>
+      </div>
+      <p class="card-meta">
+        {{ item.message.sent_ts }} · {{ item.message.correlation_id }}
+      </p>
+      <div class="card-body-full">{{ item.message.content_text }}</div>
+      <p class="card-meta">
+        To: {{ item.message.to_participants | map(attribute="participant_id") | join(", ") }}
+      </p>
+    </article>
+  {% endfor %}
+</section>
+{% endblock %}
