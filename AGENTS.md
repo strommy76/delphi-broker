@@ -1,13 +1,13 @@
 # AGENTS.md
 # Version: 2026-04-25
 
-**Delphi Broker — CLI Agent Execution Contract**
+**Agent Broker — CLI Agent Execution Contract**
 
 ---
 
 ## Scope
 
-This file applies to agents executing code locally inside the Delphi Broker repository via a CLI interface (Codex CLI, Claude Code, Gemini CLI).
+This file applies to agents executing code locally inside the Agent Broker repository via a CLI interface (Codex CLI, Claude Code, Gemini CLI). Agent Broker is the parent service; Delphi consensus and v3 task dispatch are current capability surfaces inside it.
 
 Its purpose is to ensure that local, autonomous code execution is correct, disciplined, and aligned with the project's established architecture.
 
@@ -66,7 +66,7 @@ Rule precedence:
 - `.env` — infrastructure config (operator token, host, port, db path, role overrides, web cookie security).
 - `config/agents.json` — public agent manifest (`agent_id`, `host`, `role`).
 - `config/agents-secrets.json` — gitignored sidecar for per-agent HMAC secrets in production.
-- `src/delphi_broker/config.py` — single import point; loads from all of the above.
+- `src/agent_broker/config.py` — single import point; loads from all of the above.
 
 ### API Surface
 - REST API at `/api/v1/session/*` — operator-facing session lifecycle.

@@ -1,4 +1,19 @@
-"""SQLite data layer for the v2 iterative-pipeline broker.
+"""
+--------------------------------------------------------------------------------
+FILE:        database.py
+PATH:        ~/projects/agent-broker/src/agent_broker/database.py
+DESCRIPTION: SQLite data layer for Delphi v2 session, round, iteration, review, and agent state.
+
+CHANGELOG:
+2026-05-06 14:21      Codex      [Fix] Upsert config-seeded agent registry rows so config remains canonical.
+2026-05-06 14:04      Codex      [Fix] Rebuild the agents registry table with FK enforcement paused only for the migration window.
+2026-05-06 14:00      Codex      [Fix] Make the agents registry shape migration restart-safe after failed attempts.
+2026-05-06 13:52      Codex      [Fix] Persist probe identity markers so HMAC auth works without joining Delphi worker lanes.
+2026-05-06 13:36      Codex      [Fix] Keep probe and operator participants out of the legacy Delphi agents table.
+2026-05-06 08:30      Codex      [Refactor] Rename package to agent_broker and harden fail-loud Phase 1 broker boundaries.
+--------------------------------------------------------------------------------
+
+SQLite data layer for the v2 iterative-pipeline broker.
 
 Schema, DAO operations, and HMAC signature builders for the session / round /
 iteration / review model defined in `DESIGN.md`. The v1 messages and
@@ -92,7 +107,8 @@ CREATE TABLE IF NOT EXISTS reviews (
 CREATE TABLE IF NOT EXISTS agents (
     agent_id    TEXT PRIMARY KEY,
     host        TEXT NOT NULL,
-    role        TEXT NOT NULL CHECK(role IN ('worker','arbitrator','executor')),
+    role        TEXT NOT NULL CHECK(role IN ('worker','arbitrator','executor','operator')),
+    is_probe    INTEGER NOT NULL DEFAULT 0 CHECK(is_probe IN (0,1)),
     first_seen  TEXT NOT NULL,
     last_seen   TEXT NOT NULL
 );
@@ -185,6 +201,10 @@ def _bool_text(value: bool) -> str:
     return "true" if value else "false"
 
 
+def _bool_int(value: bool) -> int:
+    return 1 if value else 0
+
+
 # ---------------------------------------------------------------------------
 # Connection / init
 # ---------------------------------------------------------------------------
@@ -210,10 +230,25 @@ def init_db(conn: sqlite3.Connection) -> None:
     _apply_migrations(conn)
     now = _now()
     for agent in SEED_AGENTS:
+        if agent["participant_type"] not in {"agent", "operator"}:
+            continue
         conn.execute(
-            """INSERT OR IGNORE INTO agents (agent_id, host, role, first_seen, last_seen)
-               VALUES (?, ?, ?, ?, ?)""",
-            (agent["agent_id"], agent["host"], agent["role"], now, now),
+            """INSERT INTO agents
+                  (agent_id, host, role, is_probe, first_seen, last_seen)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(agent_id) DO UPDATE SET
+                   host = excluded.host,
+                   role = excluded.role,
+                   is_probe = excluded.is_probe,
+                   last_seen = excluded.last_seen""",
+            (
+                agent["agent_id"],
+                agent["host"],
+                agent["role"],
+                _bool_int(agent["is_probe"]),
+                now,
+                now,
+            ),
         )
     conn.commit()
 
@@ -223,10 +258,42 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
     cur = conn.execute("PRAGMA table_info(sessions)")
     cols = {row["name"] for row in cur.fetchall()}
     if "skipped_reviewers" not in cols:
-        conn.execute(
-            "ALTER TABLE sessions ADD COLUMN skipped_reviewers TEXT NOT NULL DEFAULT '[]'"
-        )
+        conn.execute("ALTER TABLE sessions ADD COLUMN skipped_reviewers TEXT NOT NULL DEFAULT '[]'")
         conn.commit()
+    _migrate_agents_registry_shape(conn)
+
+
+def _migrate_agents_registry_shape(conn: sqlite3.Connection) -> None:
+    cur = conn.execute("PRAGMA table_info(agents)")
+    cols = {row["name"] for row in cur.fetchall()}
+    sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agents'"
+    ).fetchone()["sql"]
+    if "is_probe" in cols and "'operator'" in sql:
+        return
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        conn.executescript("""
+            DROP TABLE IF EXISTS agents_new;
+            CREATE TABLE agents_new (
+                agent_id    TEXT PRIMARY KEY,
+                host        TEXT NOT NULL,
+                role        TEXT NOT NULL CHECK(role IN ('worker','arbitrator','executor','operator')),
+                is_probe    INTEGER NOT NULL DEFAULT 0 CHECK(is_probe IN (0,1)),
+                first_seen  TEXT NOT NULL,
+                last_seen   TEXT NOT NULL
+            );
+            INSERT INTO agents_new (agent_id, host, role, is_probe, first_seen, last_seen)
+            SELECT agent_id, host, role, 0, first_seen, last_seen
+              FROM agents
+             WHERE role IN ('worker','arbitrator','executor','operator');
+            DROP TABLE agents;
+            ALTER TABLE agents_new RENAME TO agents;
+            """)
+        conn.commit()
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
 
 
 # ---------------------------------------------------------------------------
@@ -283,9 +350,7 @@ def list_sessions(
     return [dict(row) for row in cur.fetchall()]
 
 
-def update_session_status(
-    conn: sqlite3.Connection, session_id: str, status: str
-) -> dict:
+def update_session_status(conn: sqlite3.Connection, session_id: str, status: str) -> dict:
     _check_enum(status, _SESSION_STATUSES, "session status")
     now = _now()
     cur = conn.execute(
@@ -310,9 +375,7 @@ def get_skipped_reviewers(conn: sqlite3.Connection, session_id: str) -> list[str
     try:
         loaded = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"session {session_id!r} has corrupt skipped_reviewers: {raw!r}"
-        ) from exc
+        raise ValueError(f"session {session_id!r} has corrupt skipped_reviewers: {raw!r}") from exc
     if not isinstance(loaded, list) or not all(isinstance(x, str) for x in loaded):
         raise ValueError(
             f"session {session_id!r} skipped_reviewers must be JSON list[str], got {loaded!r}"
@@ -320,9 +383,7 @@ def get_skipped_reviewers(conn: sqlite3.Connection, session_id: str) -> list[str
     return loaded
 
 
-def add_skipped_reviewer(
-    conn: sqlite3.Connection, session_id: str, agent_id: str
-) -> None:
+def add_skipped_reviewer(conn: sqlite3.Connection, session_id: str, agent_id: str) -> None:
     """Append an agent_id to the session's skipped_reviewers list (no duplicates)."""
     _require(agent_id, "agent_id")
     current = get_skipped_reviewers(conn, session_id)
@@ -339,9 +400,7 @@ def add_skipped_reviewer(
     conn.commit()
 
 
-def round_2_outcome_for_session(
-    conn: sqlite3.Connection, session_id: str
-) -> Optional[str]:
+def round_2_outcome_for_session(conn: sqlite3.Connection, session_id: str) -> Optional[str]:
     """Return the outcome_text from the latest cross_host_arbitration round."""
     cur = conn.execute(
         """SELECT outcome_text FROM rounds
@@ -357,9 +416,7 @@ def round_2_outcome_for_session(
     return row["outcome_text"]
 
 
-def set_finalized_prompt(
-    conn: sqlite3.Connection, session_id: str, prompt: str
-) -> None:
+def set_finalized_prompt(conn: sqlite3.Connection, session_id: str, prompt: str) -> None:
     _require(prompt, "prompt")
     now = _now()
     cur = conn.execute(
@@ -450,9 +507,7 @@ def update_round_status(
     return rnd
 
 
-def current_round_for_session(
-    conn: sqlite3.Connection, session_id: str
-) -> Optional[dict]:
+def current_round_for_session(conn: sqlite3.Connection, session_id: str) -> Optional[dict]:
     """Return the highest-numbered round that is still pending or in-progress."""
     cur = conn.execute(
         """SELECT * FROM rounds
@@ -522,9 +577,7 @@ def get_iteration(conn: sqlite3.Connection, iteration_id: str) -> Optional[dict]
     return _row_to_dict(cur.fetchone())
 
 
-def list_iterations_for_round(
-    conn: sqlite3.Connection, round_id: str
-) -> list[dict]:
+def list_iterations_for_round(conn: sqlite3.Connection, round_id: str) -> list[dict]:
     cur = conn.execute(
         "SELECT * FROM iterations WHERE round_id = ? ORDER BY iter_num ASC",
         (round_id,),
@@ -532,9 +585,7 @@ def list_iterations_for_round(
     return [dict(row) for row in cur.fetchall()]
 
 
-def latest_iteration_for_round(
-    conn: sqlite3.Connection, round_id: str
-) -> Optional[dict]:
+def latest_iteration_for_round(conn: sqlite3.Connection, round_id: str) -> Optional[dict]:
     cur = conn.execute(
         """SELECT * FROM iterations WHERE round_id = ?
            ORDER BY iter_num DESC LIMIT 1""",
@@ -569,9 +620,7 @@ def _set_iteration_to_awaiting_destination(
     return updated
 
 
-def apply_nudge(
-    conn: sqlite3.Connection, iteration_id: str, nudge_text: str
-) -> dict:
+def apply_nudge(conn: sqlite3.Connection, iteration_id: str, nudge_text: str) -> dict:
     _require(nudge_text, "nudge_text")
     return _set_iteration_to_awaiting_destination(conn, iteration_id, nudge_text)
 
@@ -614,17 +663,13 @@ def record_destination_response(
     return updated
 
 
-def mark_iteration_off_script(
-    conn: sqlite3.Connection, iteration_id: str, reason: str
-) -> dict:
+def mark_iteration_off_script(conn: sqlite3.Connection, iteration_id: str, reason: str) -> dict:
     _require(reason, "reason")
     iteration = get_iteration(conn, iteration_id)
     if iteration is None:
         raise ValueError(f"unknown iteration_id {iteration_id!r}")
     if iteration["status"] in ("complete", "off_script"):
-        raise ValueError(
-            f"iteration {iteration_id!r} already terminal ({iteration['status']!r})"
-        )
+        raise ValueError(f"iteration {iteration_id!r} already terminal ({iteration['status']!r})")
     conn.execute(
         """UPDATE iterations
               SET status = 'off_script', destination_rationale = ?

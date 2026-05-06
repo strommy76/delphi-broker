@@ -5,30 +5,72 @@
       "agent_id": "prod-claude",
       "host": "prod",
       "role": "worker",
-      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
+      "participant_type": "agent",
+      "transport_type": "mcp",
+      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\"",
+      "is_probe": false
     },
     {
       "agent_id": "prod-codex",
       "host": "prod",
       "role": "worker",
-      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
+      "participant_type": "agent",
+      "transport_type": "mcp",
+      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\"",
+      "is_probe": false
     },
     {
       "agent_id": "dev-claude",
       "host": "dev",
       "role": "worker",
-      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
+      "participant_type": "agent",
+      "transport_type": "mcp",
+      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\"",
+      "is_probe": false
     },
     {
       "agent_id": "dev-codex",
       "host": "dev",
       "role": "worker",
-      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
+      "participant_type": "agent",
+      "transport_type": "mcp",
+      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\"",
+      "is_probe": false
     },
     {
       "agent_id": "flow-claude",
       "host": "flow",
       "role": "arbitrator",
+      "participant_type": "agent",
+      "transport_type": "mcp",
+      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\"",
+      "is_probe": false
+    },
+    {
+      "agent_id": "operator",
+      "host": "pi",
+      "role": "operator",
+      "participant_type": "operator",
+      "transport_type": "http",
+      "is_probe": false,
+      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
+    },
+    {
+      "agent_id": "pi-claude-probe",
+      "host": "pi",
+      "role": "worker",
+      "participant_type": "agent",
+      "transport_type": "http",
+      "is_probe": true,
+      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
+    },
+    {
+      "agent_id": "pi-codex-probe",
+      "host": "pi",
+      "role": "worker",
+      "participant_type": "agent",
+      "transport_type": "http",
+      "is_probe": true,
       "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
     }
   ]

@@ -1,4 +1,4 @@
-# Delphi Broker — v3 Architecture (Central Orchestration)
+# Agent Broker — v3 Architecture (Central Orchestration)
 
 > **v2's hierarchical pipeline (R1 same-host pair → R2 arbitration → R3 review)
 > required the operator to manually nudge each agent CLI per iteration.
@@ -154,6 +154,28 @@ Server enforces:
 Cookie auth via the existing `/web/login` (operator token). Phone-friendly
 — same shell as v2 web UI.
 
+### Environment contract
+
+Every variable in this table is required when importing the runtime config
+unless the note says it is checked later at the protected boundary. Unset
+values fail loud; no code path invents runtime defaults.
+
+| Variable | Unset behavior | Rationale |
+|---|---|---|
+| `DELPHI_OPERATOR_TOKEN` | fail loud on protected web/API use | Operator authority for REST mutations and web sessions |
+| `DELPHI_HOST` | fail loud at startup/import | Uvicorn bind host |
+| `DELPHI_PORT` | fail loud at startup/import | Uvicorn bind port and operator-facing URL contract |
+| `DELPHI_MCP_HOST_REGISTRY` | fail loud at startup/import | FastMCP Host-header authority registry |
+| `DELPHI_MCP_ORIGIN_REGISTRY` | fail loud at startup/import | HTTP Origin authority registry |
+| `DELPHI_DB_PATH` | fail loud at startup/import | SQLite SSOT path |
+| `DELPHI_AGENTS_PATH` | fail loud at startup/import | Public agent manifest path |
+| `DELPHI_AGENT_SECRETS_PATH` | fail loud at startup/import | Gitignored HMAC secret sidecar path |
+| `DELPHI_WEB_SECURE` | fail loud at startup/import | Operator session cookie Secure flag |
+| `DELPHI_NUDGE_SWEEP_ENABLED` | fail loud at startup/import | Enables the v2 expired-nudge sweep background process |
+| `DELPHI_MCP_SESSION_MANAGER_ENABLED` | fail loud at startup/import | Enables FastMCP Streamable HTTP session management for `/mcp` |
+| `DELPHI_ARBITRATOR_AGENT_ID` | fail loud at startup/import | Designated Delphi v2 arbitrator identity |
+| `DELPHI_EXECUTOR_AGENT_ID` | fail loud at startup/import | Designated Delphi v2 executor identity |
+
 ---
 
 ## 6. Wake-up problem & current mitigation
@@ -178,7 +200,7 @@ loop:
 
 Once empirical pilot data tells us whether `notifications/message` surfaces
 to Claude Code, we add broker-side push as an enhancement (filed as
-[issue #7](https://github.com/strommy76/delphi-broker/issues/7)). With push
+[issue #7](https://github.com/strommy76/agent-broker/issues/7)). With push
 working, polling becomes a backstop; without it, polling is the primary
 mechanism.
 
@@ -188,9 +210,9 @@ mechanism.
 
 | Issue | What |
 |---|---|
-| [#5](https://github.com/strommy76/delphi-broker/issues/5) | One-time bootstrap-token registration MCP tool |
-| [#6](https://github.com/strommy76/delphi-broker/issues/6) | Session-scoped group chat as side-channel |
-| [#7](https://github.com/strommy76/delphi-broker/issues/7) | Broker pushes iteration-available notifications |
+| [#5](https://github.com/strommy76/agent-broker/issues/5) | One-time bootstrap-token registration MCP tool |
+| [#6](https://github.com/strommy76/agent-broker/issues/6) | Session-scoped group chat as side-channel |
+| [#7](https://github.com/strommy76/agent-broker/issues/7) | Broker pushes iteration-available notifications |
 
 Daemonized agents (replace CLI sessions with API-backed brain) is the
 long-term answer to fully eliminating the wake-up problem and
@@ -202,5 +224,5 @@ multi-task-per-worker scaling. Out of scope for v3.
 
 `pi-claude` built v3 itself despite the independence rule, because
 pi-claude had the architectural context and the other agents didn't.
-Once v3 is operational, the rule applies normally — delphi-broker tasks
+Once v3 is operational, the rule applies normally — agent-broker tasks
 go to `bsflow-claude` or another non-`pi-claude` orchestrator.

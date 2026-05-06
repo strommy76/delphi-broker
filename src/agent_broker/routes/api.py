@@ -1,4 +1,14 @@
-"""Operator REST surface for the v2 broker.
+"""
+--------------------------------------------------------------------------------
+FILE:        api.py
+PATH:        ~/projects/agent-broker/src/agent_broker/routes/api.py
+DESCRIPTION: Operator REST API for Delphi v2 session lifecycle and escalation handling.
+
+CHANGELOG:
+2026-05-06 08:30      Codex      [Refactor] Rename package to agent_broker and harden fail-loud Phase 1 broker boundaries.
+--------------------------------------------------------------------------------
+
+Operator REST surface for the v2 broker.
 
 All endpoints under `/api/v1/`. The operator authenticates with a single
 session-creator token in the `X-Operator-Token` header, validated against
@@ -28,7 +38,6 @@ from ..models import (
     ApproveExecutionResponse,
     CreateSessionRequest,
     CreateSessionResponse,
-    EscalationAction,
     EscalationResolveRequest,
     EscalationResolveResponse,
     NudgeAction,
@@ -49,9 +58,7 @@ def verify_operator_token(
 ) -> str:
     """Validate the operator token header against config.OPERATOR_TOKEN."""
     expected = require_operator_token()
-    if not x_operator_token or not secrets.compare_digest(
-        x_operator_token, expected
-    ):
+    if not x_operator_token or not secrets.compare_digest(x_operator_token, expected):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="invalid operator token",
@@ -91,9 +98,7 @@ def _full_session_dict(conn: sqlite3.Connection, session_id: str) -> dict:
     iterations_by_round: dict[str, list[dict]] = {}
     reviews_by_round: dict[str, list[dict]] = {}
     for rnd in rounds:
-        iterations_by_round[rnd["id"]] = db.list_iterations_for_round(
-            conn, rnd["id"]
-        )
+        iterations_by_round[rnd["id"]] = db.list_iterations_for_round(conn, rnd["id"])
         reviews_by_round[rnd["id"]] = db.list_reviews_for_round(conn, rnd["id"])
     return {
         "session": session,
@@ -123,13 +128,9 @@ def create_session(payload: CreateSessionRequest) -> CreateSessionResponse:
             problem_text=payload.problem_text,
             nudge_window_secs=payload.nudge_window_secs,
         )
-        return CreateSessionResponse(
-            session_id=session["id"], status=session["status"]
-        )
+        return CreateSessionResponse(session_id=session["id"], status=session["status"])
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     finally:
         conn.close()
 
@@ -202,8 +203,7 @@ def post_nudge(session_id: str, payload: NudgeRequest) -> NudgeResponse:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
-                    f"iteration is in status {iteration['status']!r}, "
-                    "expected 'awaiting_nudge'"
+                    f"iteration is in status {iteration['status']!r}, " "expected 'awaiting_nudge'"
                 ),
             )
         if payload.action == NudgeAction.SUBMIT:
@@ -215,13 +215,9 @@ def post_nudge(session_id: str, payload: NudgeRequest) -> NudgeResponse:
             updated = db.apply_nudge(conn, payload.iteration_id, payload.nudge_text)
         else:  # SKIP
             updated = db.skip_nudge(conn, payload.iteration_id)
-        return NudgeResponse(
-            iteration_id=updated["id"], status=updated["status"]
-        )
+        return NudgeResponse(iteration_id=updated["id"], status=updated["status"])
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     finally:
         conn.close()
 
@@ -249,9 +245,7 @@ def post_abort(session_id: str) -> AbortResponse:
         updated = db.update_session_status(conn, session_id, "aborted")
         return AbortResponse(status=updated["status"])
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     finally:
         conn.close()
 
@@ -278,9 +272,7 @@ def post_resolve_escalation(
                 nudge_text=payload.nudge_text,
             )
         except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-            ) from exc
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         return EscalationResolveResponse(new_status=updated["status"])
     finally:
         conn.close()

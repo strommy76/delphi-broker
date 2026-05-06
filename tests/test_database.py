@@ -1,11 +1,22 @@
-"""Tests for the v2 data layer: schema, DAO, and HMAC builders."""
+"""
+--------------------------------------------------------------------------------
+FILE:        test_database.py
+PATH:        ~/projects/agent-broker/tests/test_database.py
+DESCRIPTION: Data-layer regression tests for schema, DAO behavior, and HMAC builders.
+
+CHANGELOG:
+2026-05-06 14:21      Codex      [Fix] Cover config-seeded agent upsert behavior for probe flags.
+2026-05-06 13:57      Codex      [Fix] Assert operator registry seeding and explicit non-probe legacy agents.
+2026-05-06 09:11      Codex      [Lint] Add host-standard file header after Black reformatted this test module during Phase 3 cleanup.
+--------------------------------------------------------------------------------
+
+Tests for the v2 data layer: schema, DAO, and HMAC builders."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Sessions
@@ -98,9 +109,7 @@ def test_update_round_status_terminal_sets_ended_at(conn, data_layer):
     )
     in_progress = db.update_round_status(conn, r["id"], "in_progress")
     assert in_progress["ended_at"] is None
-    converged = db.update_round_status(
-        conn, r["id"], "converged", outcome_text="final draft"
-    )
+    converged = db.update_round_status(conn, r["id"], "converged", outcome_text="final draft")
     assert converged["status"] == "converged"
     assert converged["ended_at"] is not None
     assert converged["outcome_text"] == "final draft"
@@ -140,9 +149,7 @@ def test_current_round_for_session_picks_highest_open_round(conn, data_layer):
         conn, session_id=s["id"], round_num=1, round_type="same_host_pair", host="prod"
     )
     db.update_round_status(conn, r1["id"], "converged")
-    r2 = db.create_round(
-        conn, session_id=s["id"], round_num=2, round_type="cross_host_arbitration"
-    )
+    r2 = db.create_round(conn, session_id=s["id"], round_num=2, round_type="cross_host_arbitration")
     current = db.current_round_for_session(conn, s["id"])
     assert current["id"] == r2["id"]
 
@@ -370,9 +377,7 @@ def test_latest_iteration_for_round_returns_highest_iter_num(conn, data_layer):
 def test_create_review_and_find_pending_reviewers(conn, data_layer):
     db = data_layer.database
     s = db.create_session(conn, problem_text="x")
-    r3 = db.create_round(
-        conn, session_id=s["id"], round_num=3, round_type="multi_agent_review"
-    )
+    r3 = db.create_round(conn, session_id=s["id"], round_num=3, round_type="multi_agent_review")
     expected = ["prod-claude", "prod-codex", "dev-claude", "dev-codex"]
     assert db.find_pending_reviewers_for_round(conn, r3["id"], expected) == expected
 
@@ -400,9 +405,7 @@ def test_create_review_and_find_pending_reviewers(conn, data_layer):
 def test_create_review_rejects_invalid_decision(conn, data_layer):
     db = data_layer.database
     s = db.create_session(conn, problem_text="x")
-    r3 = db.create_round(
-        conn, session_id=s["id"], round_num=3, round_type="multi_agent_review"
-    )
+    r3 = db.create_round(conn, session_id=s["id"], round_num=3, round_type="multi_agent_review")
     with pytest.raises(ValueError):
         db.create_review(
             conn,
@@ -427,10 +430,12 @@ def test_seed_agents_present_after_init(conn, data_layer):
         "dev-claude",
         "dev-codex",
         "flow-claude",
+        "operator",
     }
     flow = db.get_agent(conn, "flow-claude")
     assert flow["role"] == "arbitrator"
     assert flow["host"] == "flow"
+    assert flow["is_probe"] == 0
 
 
 def test_verify_agent_and_touch_updates_last_seen(conn, data_layer):
@@ -441,6 +446,24 @@ def test_verify_agent_and_touch_updates_last_seen(conn, data_layer):
     db.touch_agent(conn, "prod-claude")
     after = db.get_agent(conn, "prod-claude")["last_seen"]
     assert after >= before
+
+
+def test_seed_agents_upsert_config_owned_fields(conn, data_layer):
+    db = data_layer.database
+    conn.execute(
+        """UPDATE agents
+              SET host = ?, role = ?, is_probe = ?
+            WHERE agent_id = ?""",
+        ("drift", "worker", 1, "flow-claude"),
+    )
+    conn.commit()
+
+    db.init_db(conn)
+    flow = db.get_agent(conn, "flow-claude")
+
+    assert flow["host"] == "flow"
+    assert flow["role"] == "arbitrator"
+    assert flow["is_probe"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -504,9 +527,7 @@ def test_signature_builders_prefix_action_and_are_distinct(data_layer):
     )
     sig_abort = db.compute_signature(
         secret,
-        *db.build_abort_signature_fields(
-            sender="prod-claude", session_id="s-1", timestamp=ts
-        ),
+        *db.build_abort_signature_fields(sender="prod-claude", session_id="s-1", timestamp=ts),
     )
 
     sigs = [sig_create, sig_nudge, sig_emit, sig_review, sig_executor, sig_abort]
@@ -545,9 +566,7 @@ def test_signature_changes_when_self_assessment_changes(data_layer):
     )
     sig_b = db.compute_signature(
         secret,
-        *db.build_emit_response_signature_fields(
-            self_assessment="more_work_needed", **base_kwargs
-        ),
+        *db.build_emit_response_signature_fields(self_assessment="more_work_needed", **base_kwargs),
     )
     assert sig_a != sig_b
 

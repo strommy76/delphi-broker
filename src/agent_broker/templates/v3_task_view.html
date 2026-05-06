@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ task.title }} · Delphi v3{% endblock %}
+{% block title %}{{ task.title }} — Task Dispatch{% endblock %}
 {% block head %}
 {% if task.status not in ('complete', 'aborted') %}
 <meta http-equiv="refresh" content="5">

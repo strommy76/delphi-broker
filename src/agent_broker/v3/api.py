@@ -1,4 +1,15 @@
-"""v3 REST API — operator-facing task lifecycle.
+"""
+--------------------------------------------------------------------------------
+FILE:        api.py
+PATH:        ~/projects/agent-broker/src/agent_broker/v3/api.py
+DESCRIPTION: Operator REST API for Delphi v3 task lifecycle.
+
+CHANGELOG:
+2026-05-06 13:56      Codex      [Fix] Hide probe and operator identities from v3 agent selection.
+2026-05-06 08:30      Codex      [Refactor] Rename package to agent_broker and harden fail-loud Phase 1 broker boundaries.
+--------------------------------------------------------------------------------
+
+v3 REST API — operator-facing task lifecycle.
 
 Mounted under /api/v2 (note the version: v2 of the API, not v2 of the
 workflow — the workflow is v3, which is unfortunate naming but reflects
@@ -19,7 +30,6 @@ from .. import database as db
 from ..config import DB_PATH, require_operator_token
 from . import database as v3db
 
-
 router = APIRouter(prefix="/api/v2", tags=["v3"])
 
 
@@ -38,9 +48,11 @@ def _check_op_token(token: Optional[str]) -> None:
         expected = require_operator_token()
     except RuntimeError as exc:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc),
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
         ) from exc
     import secrets
+
     if not secrets.compare_digest(token, expected):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -91,15 +103,11 @@ def list_agents(
     _check_op_token(x_operator_token)
     conn = _conn()
     try:
-        cur = conn.execute(
-            "SELECT agent_id, host, role FROM agents ORDER BY role, agent_id"
-        )
+        cur = conn.execute("""SELECT agent_id, host, role FROM agents
+                WHERE is_probe = 0 AND role != 'operator'
+             ORDER BY role, agent_id""")
         rows = cur.fetchall()
-        return {
-            "agents": [
-                {"agent_id": r[0], "host": r[1], "role": r[2]} for r in rows
-            ]
-        }
+        return {"agents": [{"agent_id": r[0], "host": r[1], "role": r[2]} for r in rows]}
     finally:
         conn.close()
 
@@ -143,7 +151,10 @@ def list_tasks(
     try:
         return {
             "tasks": v3db.list_tasks(
-                conn, status=status_filter, orchestrator_id=orchestrator_id, limit=limit,
+                conn,
+                status=status_filter,
+                orchestrator_id=orchestrator_id,
+                limit=limit,
             )
         }
     finally:
@@ -194,7 +205,8 @@ def approve_task(
                 detail=f"task is in status {task['status']!r}, expected 'awaiting_approval'",
             )
         v3db.finalize_task(
-            conn, task_id,
+            conn,
+            task_id,
             final_artifact=body.final_artifact,
             final_artifact_json=body.final_artifact_json,
         )
@@ -224,8 +236,11 @@ def refine_task(
         # Log the operator's comment as an event the orchestrator can read,
         # then transition back to dispatched so the orchestrator picks it up.
         v3db.log_event(
-            conn, task_id=task_id, event_type="operator_refine_comment",
-            actor="operator", payload={"comment": body.operator_comment},
+            conn,
+            task_id=task_id,
+            event_type="operator_refine_comment",
+            actor="operator",
+            payload={"comment": body.operator_comment},
         )
         v3db.update_task_status(conn, task_id, "dispatched", actor="operator")
         return {"task_id": task_id, "status": "dispatched"}
@@ -252,8 +267,11 @@ def abort_task(
             )
         if body.reason:
             v3db.log_event(
-                conn, task_id=task_id, event_type="operator_abort_reason",
-                actor="operator", payload={"reason": body.reason},
+                conn,
+                task_id=task_id,
+                event_type="operator_abort_reason",
+                actor="operator",
+                payload={"reason": body.reason},
             )
         v3db.update_task_status(conn, task_id, "aborted", actor="operator")
         return {"task_id": task_id, "status": "aborted"}

@@ -1,4 +1,16 @@
-"""FastAPI application entrypoint for the v2 broker.
+"""
+--------------------------------------------------------------------------------
+FILE:        main.py
+PATH:        ~/projects/agent-broker/src/agent_broker/main.py
+DESCRIPTION: FastAPI application entrypoint wiring REST, web, MCP, and lifecycle services.
+
+CHANGELOG:
+2026-05-06 11:32      Codex      [Feature] Mount Phase 7 peer transcript web and REST operator routers.
+2026-05-06 09:29      Codex      [Feature] Apply peer messaging schema migration during broker startup.
+2026-05-06 08:30      Codex      [Refactor] Rename package to agent_broker and harden fail-loud Phase 1 broker boundaries.
+--------------------------------------------------------------------------------
+
+FastAPI application entrypoint for the v2 broker.
 
 Mounts the operator REST surface at `/api/v1`, the phone-friendly web UI at
 `/web`, the MCP server at `/mcp`, and serves static assets at `/static`.
@@ -12,18 +24,30 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import database as db
 from . import workflow
-from .config import DB_PATH, HOST, PORT
+from .config import (
+    DB_PATH,
+    HOST,
+    MCP_ORIGIN_REGISTRY,
+    MCP_SESSION_MANAGER_ENABLED,
+    NUDGE_SWEEP_ENABLED,
+    PORT,
+)
 from .mcp_server import mcp
+from .peer import peer_store
+from .peer.peer_api import router as peer_api_router
+from .peer.peer_web import router as peer_web_router
 from .routes.api import router as api_router
 from .routes.web import router as web_router
+from .transport_policy import TransportPolicy, validate_origin
 from .v3 import database as v3db
 from .v3.api import router as v3_api_router
 from .v3.web import router as v3_web_router
@@ -63,23 +87,51 @@ async def lifespan(application: FastAPI):
     conn = db.get_connection(DB_PATH)
     db.init_db(conn)
     v3db.init_v3_schema(conn)
+    peer_store.init_peer_schema(conn)
     conn.close()
-    # Start the FastMCP session manager. Without this, every /mcp request
-    # raises "Task group is not initialized. Make sure to use run()."
-    async with mcp.session_manager.run():
-        # Spawn the background sweep task.
-        sweep_task = asyncio.create_task(_nudge_sweep_loop(), name="nudge-sweep")
+    # Start the FastMCP session manager when MCP transport is enabled.
+    # Direct unit tests call tool functions without the stream manager.
+    mcp_context = mcp.session_manager.run() if MCP_SESSION_MANAGER_ENABLED else nullcontext()
+    async with mcp_context:
+        sweep_task = (
+            asyncio.create_task(_nudge_sweep_loop(), name="nudge-sweep")
+            if NUDGE_SWEEP_ENABLED
+            else None
+        )
         try:
             yield
         finally:
-            sweep_task.cancel()
-            try:
-                await sweep_task
-            except asyncio.CancelledError:
-                pass
+            if sweep_task is not None:
+                sweep_task.cancel()
+                try:
+                    await sweep_task
+                except asyncio.CancelledError:
+                    pass
 
 
-app = FastAPI(title="Delphi Broker", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Agent Broker", version="0.2.0", lifespan=lifespan)
+_transport_policy = TransportPolicy(
+    origin_registry=MCP_ORIGIN_REGISTRY,
+)
+
+
+@app.middleware("http")
+async def enforce_origin_policy(request, call_next):
+    if request.url.path.startswith("/mcp"):
+        return await call_next(request)
+    client = request.client.host if request.client else None
+    allowed, reason = validate_origin(
+        policy=_transport_policy,
+        client_host=client,
+        origin=request.headers.get("origin"),
+    )
+    if not allowed:
+        return JSONResponse(
+            status_code=403,
+            content={"error": "origin_rejected", "reason": reason},
+        )
+    return await call_next(request)
+
 
 # Static assets.
 _static_dir = Path(__file__).resolve().parent / "static"
@@ -88,6 +140,8 @@ app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 # REST API + web UI.
 app.include_router(api_router)
 app.include_router(web_router)
+app.include_router(peer_api_router)
+app.include_router(peer_web_router)
 app.include_router(v3_api_router)  # /api/v2/* — v3 task lifecycle
 app.include_router(v3_web_router)  # /web/v3/* — operator UI for v3 tasks
 

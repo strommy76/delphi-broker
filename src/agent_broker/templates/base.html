@@ -3,15 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Delphi Broker{% endblock %}</title>
+  <title>{% block title %}Agent Broker{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
   {% block head %}{% endblock %}
 </head>
 <body>
   <nav class="nav">
-    <span class="nav-brand">Delphi</span>
+    <span class="nav-brand">Agent Broker</span>
     <a href="/web/v3/">Tasks</a>
     <a href="/web/v3/new">New Task</a>
+    <a href="/web/peer/threads?limit=50&offset=0">Peer Transcript</a>
     <a href="/web/" style="opacity:0.6;font-size:0.85em;">v2 sessions</a>
     <form action="/web/logout" method="post" style="display:inline;margin-left:auto;">
       <button type="submit" class="btn" style="background:transparent;color:var(--muted);">Logout</button>

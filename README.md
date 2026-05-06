@@ -1,6 +1,9 @@
-# Delphi Broker
+# Agent Broker
 
-Iterative-pipeline coordinator for a hierarchical multi-agent prompt-refinement workflow. The broker mechanizes the operator's manual copy-paste between CLI agents (Codex, Claude Code) running across Tailscale-connected hosts, while preserving every human nudge point.
+Agent Broker hosts agent communication workflows behind authenticated local
+services. The current surfaces are the Delphi consensus workflow, v3 task
+dispatch, and MCP/HTTP transport boundaries that will carry future peer-agent
+coordination without renaming the project again.
 
 The authoritative architecture spec is [`DESIGN.md`](./DESIGN.md). This README is operator-facing setup; `DESIGN.md` is the contract.
 
@@ -40,8 +43,10 @@ Infrastructure config lives in `.env` (copy from `.env.example`):
 DELPHI_OPERATOR_TOKEN=change-me-to-a-random-string
 
 # Network
-DELPHI_HOST=0.0.0.0
+DELPHI_HOST=127.0.0.1
 DELPHI_PORT=8420
+DELPHI_MCP_HOST_REGISTRY=127.0.0.1:*,localhost:*
+DELPHI_MCP_ORIGIN_REGISTRY=http://127.0.0.1:8420,http://localhost:8420
 
 # Storage
 DELPHI_DB_PATH=delphi.db
@@ -54,19 +59,25 @@ DELPHI_EXECUTOR_AGENT_ID=dev-codex-executor
 
 # Web UI
 DELPHI_WEB_SECURE=false   # set true when fronted by HTTPS
+DELPHI_NUDGE_SWEEP_ENABLED=true
+DELPHI_MCP_SESSION_MANAGER_ENABLED=true
 ```
 
-| Variable | Required | Default | Notes |
+| Variable | Required | Unset behavior | Notes |
 |---|---|---|---|
-| `DELPHI_OPERATOR_TOKEN` | yes | — | Generate with `python -c "import secrets; print(secrets.token_hex(32))"` |
-| `DELPHI_HOST` | no | `0.0.0.0` | |
-| `DELPHI_PORT` | no | `8420` | |
-| `DELPHI_DB_PATH` | no | `delphi.db` | Resolved relative to project root unless absolute |
-| `DELPHI_AGENTS_PATH` | no | `config/agents.json` | Public agent manifest (committed) |
-| `DELPHI_AGENT_SECRETS_PATH` | no | `config/agents-secrets.json` | Optional sidecar; preferred for production secrets |
-| `DELPHI_ARBITRATOR_AGENT_ID` | no | `flow-claude` | Must exist with `role='arbitrator'` |
-| `DELPHI_EXECUTOR_AGENT_ID` | no | `dev-codex` | Must exist with `role='executor'` (cannot also be a worker — see `DESIGN.md` §2) |
-| `DELPHI_WEB_SECURE` | no | `false` | `true`/`1`/`yes` flags the operator session cookie `Secure` |
+| `DELPHI_OPERATOR_TOKEN` | yes | fail loud on protected web/API use | Generate with `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `DELPHI_HOST` | yes | fail loud at startup/import | Localhost mode uses `127.0.0.1` |
+| `DELPHI_PORT` | yes | fail loud at startup/import | |
+| `DELPHI_MCP_HOST_REGISTRY` | yes | fail loud at startup/import | Deployment host-header registry for MCP transport security |
+| `DELPHI_MCP_ORIGIN_REGISTRY` | yes | fail loud at startup/import | Deployment Origin registry for HTTP ingress |
+| `DELPHI_DB_PATH` | yes | fail loud at startup/import | Resolved relative to project root unless absolute |
+| `DELPHI_AGENTS_PATH` | yes | fail loud at startup/import | Public agent manifest (committed) |
+| `DELPHI_AGENT_SECRETS_PATH` | yes | fail loud at startup/import | Sidecar path for production secrets |
+| `DELPHI_ARBITRATOR_AGENT_ID` | yes | fail loud at startup/import | Must exist with `role='arbitrator'` |
+| `DELPHI_EXECUTOR_AGENT_ID` | yes | fail loud at startup/import | Must exist with `role='executor'` (cannot also be a worker — see `DESIGN.md` §2) |
+| `DELPHI_WEB_SECURE` | yes | fail loud at startup/import | `true`/`1`/`yes` flags the operator session cookie `Secure` |
+| `DELPHI_NUDGE_SWEEP_ENABLED` | yes | fail loud at startup/import | Enables the background expired-nudge sweep |
+| `DELPHI_MCP_SESSION_MANAGER_ENABLED` | yes | fail loud at startup/import | Enables the FastMCP stream session manager for HTTP MCP transport |
 
 Agent registry lives in `config/agents.json` (copy from example):
 
@@ -82,10 +93,10 @@ Each agent entry declares `agent_id`, `host`, and exactly one `role` from `worke
 
 ```bash
 cp .env.example .env  # fill in DELPHI_OPERATOR_TOKEN
-docker compose -p delphi-broker up -d --build
+docker compose -p agent-broker up -d --build
 ```
 
-> The `-p delphi-broker` flag isolates this stack from other compose projects on the same host.
+> The `-p agent-broker` flag isolates this stack from other compose projects on the same host.
 
 Data persists in `./data/` (SQLite DB). Agent registry is mounted read-only from `./config/`.
 
@@ -94,7 +105,7 @@ Data persists in `./data/` (SQLite DB). Agent registry is mounted read-only from
 ```bash
 pip install -r requirements.txt
 cp .env.example .env  # fill in DELPHI_OPERATOR_TOKEN
-python -m uvicorn delphi_broker.main:app --host 0.0.0.0 --port 8420 --app-dir src
+PYTHONPATH=src python -m agent_broker.main
 ```
 
 ## MCP Client Configuration
@@ -104,7 +115,7 @@ Add to `~/.claude/settings.json` on each agent host:
 ```json
 {
   "mcpServers": {
-    "delphi-broker": {
+    "agent-broker": {
       "type": "url",
       "url": "http://<broker-host>:8420/mcp"
     }
@@ -130,7 +141,7 @@ Every worker, arbitrator, and reviewer response must conform to the structured J
 ## Project Structure
 
 ```
-delphi-broker/
+agent-broker/
   .env.example          # Environment config template
   DESIGN.md             # Authoritative architecture contract (v2)
   Dockerfile            # Container image
@@ -138,7 +149,7 @@ delphi-broker/
   config/
     agents.json.example
     agents-secrets.json.example
-  src/delphi_broker/
+  src/agent_broker/
     config.py           # Configuration loader (single import point)
     database.py         # SQLite layer + signature helpers
     main.py             # FastAPI app + lifespan

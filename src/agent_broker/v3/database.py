@@ -1,4 +1,15 @@
-"""v3 schema + DAO — orchestrator-worker pattern.
+"""
+--------------------------------------------------------------------------------
+FILE:        database.py
+PATH:        ~/projects/agent-broker/src/agent_broker/v3/database.py
+DESCRIPTION: SQLite data layer for Delphi v3 task, dispatch, output, aggregation, and event state.
+
+CHANGELOG:
+2026-05-06 13:55      Codex      [Fix] Keep probe and operator identities out of v3 task dispatch authority.
+2026-05-06 08:30      Codex      [Refactor] Rename package to agent_broker and harden fail-loud Phase 1 broker boundaries.
+--------------------------------------------------------------------------------
+
+v3 schema + DAO — orchestrator-worker pattern.
 
 Schema (all tables prefixed v3_ to make migration / archive boundaries
 explicit; agents and agent secrets remain shared with v2):
@@ -22,7 +33,6 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from typing import Any
-
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -148,7 +158,9 @@ def create_task(
     Raises ValueError if orchestrator_id is not registered as an agent.
     """
     cur = conn.execute(
-        "SELECT 1 FROM agents WHERE agent_id = ?", (orchestrator_id,)
+        """SELECT 1 FROM agents
+            WHERE agent_id = ? AND is_probe = 0 AND role != 'operator'""",
+        (orchestrator_id,),
     )
     if cur.fetchone() is None:
         raise ValueError(f"orchestrator_id {orchestrator_id!r} is not a registered agent")
@@ -161,13 +173,19 @@ def create_task(
         " created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, 'new', ?, ?)",
         (
-            task_id, title, problem_text,
+            task_id,
+            title,
+            problem_text,
             json.dumps(task_json) if task_json else None,
-            orchestrator_id, now, now,
+            orchestrator_id,
+            now,
+            now,
         ),
     )
     log_event(
-        conn, task_id=task_id, event_type="task_created",
+        conn,
+        task_id=task_id,
+        event_type="task_created",
         actor="operator",
         payload={"title": title, "orchestrator_id": orchestrator_id},
     )
@@ -205,20 +223,28 @@ def list_tasks(
 
 
 _VALID_TASK_TRANSITIONS: dict[str, set[str]] = {
-    "new":               {"dispatched", "aborted"},
-    "dispatched":        {"aggregating", "awaiting_approval", "dispatched",
-                          "aborted", "escalated"},  # self-loop allowed for refine
-    "aggregating":       {"dispatched", "awaiting_approval", "aborted", "escalated"},
+    "new": {"dispatched", "aborted"},
+    "dispatched": {
+        "aggregating",
+        "awaiting_approval",
+        "dispatched",
+        "aborted",
+        "escalated",
+    },  # self-loop allowed for refine
+    "aggregating": {"dispatched", "awaiting_approval", "aborted", "escalated"},
     "awaiting_approval": {"complete", "dispatched", "aborted"},  # operator can refine
-    "complete":          set(),
-    "aborted":           set(),
-    "escalated":         {"aborted", "dispatched"},  # operator can resolve
+    "complete": set(),
+    "aborted": set(),
+    "escalated": {"aborted", "dispatched"},  # operator can resolve
 }
 
 
 def update_task_status(
-    conn: sqlite3.Connection, task_id: str, new_status: str,
-    *, actor: str | None = None,
+    conn: sqlite3.Connection,
+    task_id: str,
+    new_status: str,
+    *,
+    actor: str | None = None,
 ) -> None:
     """Move a task to a new status. Validates transition. Same-status is a no-op."""
     cur = conn.execute("SELECT status FROM v3_tasks WHERE id = ?", (task_id,))
@@ -229,9 +255,7 @@ def update_task_status(
     if current == new_status:
         return  # idempotent no-op
     if new_status not in _VALID_TASK_TRANSITIONS.get(current, set()):
-        raise ValueError(
-            f"invalid task transition: {current!r} -> {new_status!r}"
-        )
+        raise ValueError(f"invalid task transition: {current!r} -> {new_status!r}")
     now = _now()
     update_completed = ", completed_at = ?" if new_status in ("complete", "aborted") else ""
     update_args: list[Any] = [new_status, now]
@@ -243,7 +267,9 @@ def update_task_status(
         update_args,
     )
     log_event(
-        conn, task_id=task_id, event_type="task_status_changed",
+        conn,
+        task_id=task_id,
+        event_type="task_status_changed",
         actor=actor,
         payload={"from": current, "to": new_status},
     )
@@ -251,8 +277,11 @@ def update_task_status(
 
 
 def finalize_task(
-    conn: sqlite3.Connection, task_id: str,
-    *, final_artifact: str, final_artifact_json: dict[str, Any] | None = None,
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    final_artifact: str,
+    final_artifact_json: dict[str, Any] | None = None,
     actor: str = "operator",
 ) -> None:
     """Mark a task complete with an approved final artifact. Operator action."""
@@ -264,11 +293,15 @@ def finalize_task(
         (
             final_artifact,
             json.dumps(final_artifact_json) if final_artifact_json else None,
-            now, now, task_id,
+            now,
+            now,
+            task_id,
         ),
     )
     log_event(
-        conn, task_id=task_id, event_type="task_finalized",
+        conn,
+        task_id=task_id,
+        event_type="task_finalized",
         actor=actor,
         payload={"artifact_len": len(final_artifact)},
     )
@@ -295,10 +328,13 @@ def create_dispatch(
         raise ValueError(f"task {task_id!r} not found")
     if worker_id == task["orchestrator_id"]:
         raise ValueError(
-            f"orchestrator {worker_id!r} cannot dispatch to themselves "
-            "(independence rule)"
+            f"orchestrator {worker_id!r} cannot dispatch to themselves " "(independence rule)"
         )
-    cur = conn.execute("SELECT 1 FROM agents WHERE agent_id = ?", (worker_id,))
+    cur = conn.execute(
+        """SELECT 1 FROM agents
+            WHERE agent_id = ? AND is_probe = 0 AND role != 'operator'""",
+        (worker_id,),
+    )
     if cur.fetchone() is None:
         raise ValueError(f"worker_id {worker_id!r} is not a registered agent")
 
@@ -309,7 +345,10 @@ def create_dispatch(
         "(id, task_id, worker_id, subtask_text, subtask_json, status, dispatched_at) "
         "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
         (
-            dispatch_id, task_id, worker_id, subtask_text,
+            dispatch_id,
+            task_id,
+            worker_id,
+            subtask_text,
             json.dumps(subtask_json) if subtask_json else None,
             now,
         ),
@@ -318,7 +357,9 @@ def create_dispatch(
     if task["status"] == "new":
         update_task_status(conn, task_id, "dispatched", actor=actor or task["orchestrator_id"])
     log_event(
-        conn, task_id=task_id, event_type="dispatch_created",
+        conn,
+        task_id=task_id,
+        event_type="dispatch_created",
         actor=actor or task["orchestrator_id"],
         payload={"dispatch_id": dispatch_id, "worker_id": worker_id},
     )
@@ -359,29 +400,28 @@ def list_dispatches(
 
 
 _VALID_DISPATCH_TRANSITIONS: dict[str, set[str]] = {
-    "pending":     {"in_progress", "cancelled"},
+    "pending": {"in_progress", "cancelled"},
     "in_progress": {"done", "failed", "cancelled"},
-    "done":        set(),
-    "failed":      {"in_progress"},   # allow retry
-    "cancelled":   set(),
+    "done": set(),
+    "failed": {"in_progress"},  # allow retry
+    "cancelled": set(),
 }
 
 
 def update_dispatch_status(
-    conn: sqlite3.Connection, dispatch_id: str, new_status: str,
-    *, actor: str | None = None,
+    conn: sqlite3.Connection,
+    dispatch_id: str,
+    new_status: str,
+    *,
+    actor: str | None = None,
 ) -> None:
-    cur = conn.execute(
-        "SELECT status, task_id FROM v3_dispatches WHERE id = ?", (dispatch_id,)
-    )
+    cur = conn.execute("SELECT status, task_id FROM v3_dispatches WHERE id = ?", (dispatch_id,))
     row = cur.fetchone()
     if row is None:
         raise ValueError(f"dispatch {dispatch_id!r} not found")
     current, task_id = row[0], row[1]
     if new_status not in _VALID_DISPATCH_TRANSITIONS.get(current, set()):
-        raise ValueError(
-            f"invalid dispatch transition: {current!r} -> {new_status!r}"
-        )
+        raise ValueError(f"invalid dispatch transition: {current!r} -> {new_status!r}")
     now = _now()
     if new_status == "in_progress" and current == "pending":
         conn.execute(
@@ -399,7 +439,9 @@ def update_dispatch_status(
             (new_status, dispatch_id),
         )
     log_event(
-        conn, task_id=task_id, event_type="dispatch_status_changed",
+        conn,
+        task_id=task_id,
+        event_type="dispatch_status_changed",
         actor=actor,
         payload={"dispatch_id": dispatch_id, "from": current, "to": new_status},
     )
@@ -428,26 +470,37 @@ def record_worker_output(
         "INSERT INTO v3_worker_outputs (dispatch_id, output_text, output_json, emitted_at) "
         "VALUES (?, ?, ?, ?)",
         (
-            dispatch_id, output_text,
+            dispatch_id,
+            output_text,
             json.dumps(output_json) if output_json else None,
             now,
         ),
     )
     output_id = int(cur.lastrowid)
     update_dispatch_status(
-        conn, dispatch_id, "done", actor=dispatch["worker_id"],
+        conn,
+        dispatch_id,
+        "done",
+        actor=dispatch["worker_id"],
     )
     log_event(
-        conn, task_id=dispatch["task_id"], event_type="worker_output_received",
+        conn,
+        task_id=dispatch["task_id"],
+        event_type="worker_output_received",
         actor=dispatch["worker_id"],
-        payload={"dispatch_id": dispatch_id, "output_id": output_id, "output_len": len(output_text)},
+        payload={
+            "dispatch_id": dispatch_id,
+            "output_id": output_id,
+            "output_len": len(output_text),
+        },
     )
     conn.commit()
     return output_id
 
 
 def get_outputs_for_task(
-    conn: sqlite3.Connection, task_id: str,
+    conn: sqlite3.Connection,
+    task_id: str,
 ) -> list[dict[str, Any]]:
     """Return all worker outputs for a task, joined with their dispatch info."""
     cur = conn.execute(
@@ -490,9 +543,12 @@ def create_aggregation(
         "(task_id, synthesis_text, synthesis_json, decision, refine_directive, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
         (
-            task_id, synthesis_text,
+            task_id,
+            synthesis_text,
             json.dumps(synthesis_json) if synthesis_json else None,
-            decision, refine_directive, now,
+            decision,
+            refine_directive,
+            now,
         ),
     )
     agg_id = int(cur.lastrowid)
@@ -506,7 +562,9 @@ def create_aggregation(
         update_task_status(conn, task_id, "escalated", actor=actor)
 
     log_event(
-        conn, task_id=task_id, event_type="aggregation_created",
+        conn,
+        task_id=task_id,
+        event_type="aggregation_created",
         actor=actor or task["orchestrator_id"],
         payload={"aggregation_id": agg_id, "decision": decision},
     )
@@ -515,7 +573,8 @@ def create_aggregation(
 
 
 def list_aggregations(
-    conn: sqlite3.Connection, task_id: str,
+    conn: sqlite3.Connection,
+    task_id: str,
 ) -> list[dict[str, Any]]:
     cur = conn.execute(
         "SELECT * FROM v3_aggregations WHERE task_id = ? ORDER BY created_at ASC",
@@ -544,7 +603,9 @@ def log_event(
         "INSERT INTO v3_task_events (task_id, event_type, actor, payload_json, occurred_at) "
         "VALUES (?, ?, ?, ?, ?)",
         (
-            task_id, event_type, actor,
+            task_id,
+            event_type,
+            actor,
             json.dumps(payload) if payload else None,
             occurred_at or _now(),
         ),
@@ -553,8 +614,10 @@ def log_event(
 
 
 def list_events(
-    conn: sqlite3.Connection, task_id: str,
-    *, limit: int = 500,
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    limit: int = 500,
 ) -> list[dict[str, Any]]:
     cur = conn.execute(
         "SELECT * FROM v3_task_events WHERE task_id = ? "
@@ -566,11 +629,19 @@ def list_events(
 
 __all__ = [
     "init_v3_schema",
-    "create_task", "get_task", "list_tasks",
-    "update_task_status", "finalize_task",
-    "create_dispatch", "get_dispatch", "list_dispatches",
+    "create_task",
+    "get_task",
+    "list_tasks",
+    "update_task_status",
+    "finalize_task",
+    "create_dispatch",
+    "get_dispatch",
+    "list_dispatches",
     "update_dispatch_status",
-    "record_worker_output", "get_outputs_for_task",
-    "create_aggregation", "list_aggregations",
-    "log_event", "list_events",
+    "record_worker_output",
+    "get_outputs_for_task",
+    "create_aggregation",
+    "list_aggregations",
+    "log_event",
+    "list_events",
 ]

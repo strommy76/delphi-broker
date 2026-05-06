@@ -9,11 +9,16 @@ build/
 venv/
 env/
 .env
+.coverage
 config/agents.json
 config/agents-secrets.json
+config/operator_permanently_hidden_threads.json
 *.db
 *.db-shm
 *.db-wal
 .claude/
 node_modules/
 .aider*
+
+# Tranche briefs and ephemeral working artifacts
+.tmp/

@@ -1,4 +1,14 @@
-"""Delphi Broker v3 — central-orchestration model.
+"""
+--------------------------------------------------------------------------------
+FILE:        __init__.py
+PATH:        ~/projects/agent-broker/src/agent_broker/v3/__init__.py
+DESCRIPTION: Package marker and overview for the Delphi v3 orchestration lane.
+
+CHANGELOG:
+2026-05-06 08:30      Codex      [Refactor] Rename package to agent_broker and harden fail-loud Phase 1 broker boundaries.
+--------------------------------------------------------------------------------
+
+Agent Broker v3 — central-orchestration model.
 
 v3 collapses v2's hierarchical pipeline (R1 same-host pair → R2 arbitration →
 R3 review) into a simpler orchestrator-worker pattern:

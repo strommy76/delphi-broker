@@ -1,10 +1,10 @@
-# Delphi Broker — Architecture (v2: Iterative Pipeline)
+# Agent Broker — v2 Delphi Consensus Architecture
 
 **Status:** Authoritative design contract. Implementation must conform.
 **Replaces:** v1 approval-gated message routing.
 **Last updated:** 2026-04-25
 
-This document is the single source of truth for what Delphi Broker does and how it does it. Code that disagrees with this doc is wrong; doc that disagrees with operator intent is wrong. Resolve disagreements by escalating to the operator before writing code.
+This document is the single source of truth for the v2 Delphi consensus workflow hosted inside Agent Broker. Code that disagrees with this doc is wrong; doc that disagrees with operator intent is wrong. Resolve disagreements by escalating to the operator before writing code.
 
 ---
 

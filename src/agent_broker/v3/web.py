@@ -1,4 +1,15 @@
-"""v3 web UI — phone-friendly task lifecycle for the operator.
+"""
+--------------------------------------------------------------------------------
+FILE:        web.py
+PATH:        ~/projects/agent-broker/src/agent_broker/v3/web.py
+DESCRIPTION: Operator web UI for Delphi v3 task lifecycle inspection and approval.
+
+CHANGELOG:
+2026-05-06 13:56      Codex      [Fix] Hide probe and operator identities from v3 web task selection.
+2026-05-06 08:30      Codex      [Refactor] Rename package to agent_broker and harden fail-loud Phase 1 broker boundaries.
+--------------------------------------------------------------------------------
+
+v3 web UI — phone-friendly task lifecycle for the operator.
 
 Mounted under /web/v3. Reuses cookie auth + base.html / style.css from
 v2's web router. Three pages:
@@ -27,7 +38,6 @@ from fastapi.templating import Jinja2Templates
 from .. import database as db
 from ..config import DB_PATH, require_operator_token
 from . import database as v3db
-
 
 router = APIRouter(prefix="/web/v3", tags=["v3-web"])
 
@@ -77,7 +87,8 @@ def _validate_task_id(task_id: str) -> None:
 
 @router.get("/", response_class=HTMLResponse)
 def tasks_list(
-    request: Request, op_token: Optional[str] = Cookie(default=None),
+    request: Request,
+    op_token: Optional[str] = Cookie(default=None),
 ):
     if not _is_authed(op_token):
         return _login_redirect()
@@ -99,7 +110,8 @@ def tasks_list(
 
 @router.get("/new", response_class=HTMLResponse)
 def new_task_form(
-    request: Request, op_token: Optional[str] = Cookie(default=None),
+    request: Request,
+    op_token: Optional[str] = Cookie(default=None),
 ):
     if not _is_authed(op_token):
         return _login_redirect()
@@ -107,15 +119,19 @@ def new_task_form(
     try:
         agents = [
             {"agent_id": r[0], "host": r[1], "role": r[2]}
-            for r in conn.execute(
-                "SELECT agent_id, host, role FROM agents ORDER BY role, agent_id"
-            )
+            for r in conn.execute("""SELECT agent_id, host, role FROM agents
+                    WHERE is_probe = 0 AND role != 'operator'
+                 ORDER BY role, agent_id""")
         ]
     finally:
         conn.close()
     # Default orchestrator: pi-claude per project memory (independence from Lexx);
     # operator can override.
-    default_orch = "pi-claude" if any(a["agent_id"] == "pi-claude" for a in agents) else (agents[0]["agent_id"] if agents else "")
+    default_orch = (
+        "pi-claude"
+        if any(a["agent_id"] == "pi-claude" for a in agents)
+        else (agents[0]["agent_id"] if agents else "")
+    )
     return templates.TemplateResponse(
         request=request,
         name="v3_task_new.html",
@@ -138,8 +154,6 @@ def new_task_submit(
         try:
             parsed_json = json.loads(task_json)
         except json.JSONDecodeError as exc:
-            # Re-render with error
-            from fastapi.responses import HTMLResponse as _H  # local import to avoid shadowing
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"task_json is not valid JSON: {exc}",
@@ -147,8 +161,11 @@ def new_task_submit(
     conn = _conn()
     try:
         task_id = v3db.create_task(
-            conn, title=title.strip(), problem_text=problem_text,
-            orchestrator_id=orchestrator_id, task_json=parsed_json,
+            conn,
+            title=title.strip(),
+            problem_text=problem_text,
+            orchestrator_id=orchestrator_id,
+            task_json=parsed_json,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -237,8 +254,11 @@ def task_refine(
                 detail=f"refine only valid from 'awaiting_approval'; current is {task['status']!r}",
             )
         v3db.log_event(
-            conn, task_id=task_id, event_type="operator_refine_comment",
-            actor="operator", payload={"comment": operator_comment},
+            conn,
+            task_id=task_id,
+            event_type="operator_refine_comment",
+            actor="operator",
+            payload={"comment": operator_comment},
         )
         v3db.update_task_status(conn, task_id, "dispatched", actor="operator")
     finally:
@@ -267,8 +287,11 @@ def task_abort(
             )
         if reason.strip():
             v3db.log_event(
-                conn, task_id=task_id, event_type="operator_abort_reason",
-                actor="operator", payload={"reason": reason.strip()},
+                conn,
+                task_id=task_id,
+                event_type="operator_abort_reason",
+                actor="operator",
+                payload={"reason": reason.strip()},
             )
         v3db.update_task_status(conn, task_id, "aborted", actor="operator")
     finally:

@@ -1,11 +1,25 @@
-"""Operator REST surface tests (FastAPI TestClient)."""
+"""
+--------------------------------------------------------------------------------
+FILE:        test_api.py
+PATH:        ~/projects/agent-broker/tests/test_api.py
+DESCRIPTION: Operator REST API and HTTP middleware regression tests.
+
+CHANGELOG:
+2026-05-06 14:02      Codex      [Refactor] Rename operator permanently hidden thread config example assertions.
+2026-05-06 13:39      Codex      [Fix] Assert operator hidden-thread config is example-backed and gitignored.
+2026-05-06 09:35      Codex      [Refactor] Update config registration assertion for explicit peer participant identity fields.
+2026-05-06 08:30      Codex      [Refactor] Rename package to agent_broker and harden fail-loud Phase 1 broker boundaries.
+--------------------------------------------------------------------------------
+
+Operator REST surface tests (FastAPI TestClient)."""
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # 1. Create session: valid token -> 201 with session_id
@@ -38,6 +52,115 @@ def test_create_session_rejects_bad_token(client, api_harness):
         json={"problem_text": "x"},
     )
     assert bad.status_code == 403
+
+
+def test_foreign_origin_rejected_by_app_middleware(client):
+    resp = client.get(
+        "/api/v2/agents",
+        headers={
+            "X-Operator-Token": "test-operator-token",
+            "Origin": "http://example.test:8420",
+        },
+    )
+    assert resp.status_code == 403
+    assert resp.json()["error"] == "origin_rejected"
+
+
+def test_phase_3_config_registers_pi_codex():
+    root = Path(__file__).resolve().parents[1]
+    agents = json.loads((root / "config" / "agents.json").read_text())["agents"]
+    pi_codex = [agent for agent in agents if agent["agent_id"] == "pi-codex"]
+    assert pi_codex == [
+        {
+            "agent_id": "pi-codex",
+            "host": "pi",
+            "role": "worker",
+            "participant_type": "agent",
+            "transport_type": "mcp",
+            "is_probe": False,
+        }
+    ]
+    assert "config/agents-secrets.json" in (root / ".gitignore").read_text()
+
+
+def test_operator_hidden_threads_config_is_gitignored_with_example():
+    root = Path(__file__).resolve().parents[1]
+    gitignore = (root / ".gitignore").read_text()
+    example = json.loads(
+        (root / "config" / "operator_permanently_hidden_threads.json.example").read_text()
+    )
+
+    assert "config/operator_permanently_hidden_threads.json" in gitignore
+    assert example["thread_ids"] == []
+    assert example["_meta"]["changelog"]
+
+
+def test_template_brand_and_task_dispatch_titles_are_split():
+    templates = Path(__file__).resolve().parents[1] / "src" / "agent_broker" / "templates"
+    assert '<span class="nav-brand">Agent Broker</span>' in (templates / "base.html").read_text()
+    assert "Tasks — Task Dispatch" in (templates / "v3_tasks_list.html").read_text()
+    assert "New task — Task Dispatch" in (templates / "v3_task_new.html").read_text()
+    assert "{{ task.title }} — Task Dispatch" in (templates / "v3_task_view.html").read_text()
+    assert "Sessions — Delphi" in (templates / "sessions_list.html").read_text()
+
+
+def test_v3_operator_rosters_exclude_probe_and_operator_identities(
+    api_harness,
+    operator_token,
+):
+    api_agents = api_harness.client.get("/api/v2/agents")
+    assert api_agents.status_code == 200, api_agents.text
+    api_ids = {agent["agent_id"] for agent in api_agents.json()["agents"]}
+
+    api_harness.client.cookies.set("op_token", operator_token)
+    web_form = api_harness.client.get("/web/v3/new")
+    assert web_form.status_code == 200, web_form.text
+
+    assert "pi-claude-probe" not in api_ids
+    assert "pi-codex-probe" not in api_ids
+    assert "operator" not in api_ids
+    assert "pi-claude-probe" not in web_form.text
+    assert "pi-codex-probe" not in web_form.text
+    assert 'value="operator"' not in web_form.text
+
+
+def test_v3_database_rejects_probe_and_operator_task_authority(api_harness):
+    from agent_broker.v3 import database as v3db
+
+    conn = api_harness.database.get_connection(api_harness.config.DB_PATH)
+    try:
+        api_harness.database.init_db(conn)
+        v3db.init_v3_schema(conn)
+        task_id = v3db.create_task(
+            conn,
+            title="probe segregation",
+            problem_text="x",
+            orchestrator_id="prod-claude",
+        )
+        with pytest.raises(ValueError, match="worker_id"):
+            v3db.create_dispatch(
+                conn,
+                task_id=task_id,
+                worker_id="pi-claude-probe",
+                subtask_text="x",
+                subtask_json={},
+            )
+        with pytest.raises(ValueError, match="orchestrator_id"):
+            v3db.create_task(
+                conn,
+                title="operator rejected",
+                problem_text="x",
+                orchestrator_id="operator",
+            )
+        with pytest.raises(ValueError, match="orchestrator_id"):
+            v3db.create_task(
+                conn,
+                title="probe rejected",
+                problem_text="x",
+                orchestrator_id="pi-claude-probe",
+            )
+    finally:
+        conn.close()
 
 
 def test_create_session_validates_payload(client):
@@ -147,13 +270,9 @@ def test_submit_nudge_transitions_iteration(client, api_harness):
 
 
 def test_submit_nudge_requires_text(client, api_harness):
-    create = client.post(
-        "/api/v1/session", json={"problem_text": "x", "nudge_window_secs": 300}
-    )
+    create = client.post("/api/v1/session", json={"problem_text": "x", "nudge_window_secs": 300})
     session_id = create.json()["session_id"]
-    iteration_id = client.get(
-        f"/api/v1/session/{session_id}/pending"
-    ).json()["transition"]["id"]
+    iteration_id = client.get(f"/api/v1/session/{session_id}/pending").json()["transition"]["id"]
     resp = client.post(
         f"/api/v1/session/{session_id}/nudge",
         json={"iteration_id": iteration_id, "action": "submit"},
@@ -162,13 +281,9 @@ def test_submit_nudge_requires_text(client, api_harness):
 
 
 def test_skip_nudge_transitions_iteration(client, api_harness):
-    create = client.post(
-        "/api/v1/session", json={"problem_text": "x", "nudge_window_secs": 300}
-    )
+    create = client.post("/api/v1/session", json={"problem_text": "x", "nudge_window_secs": 300})
     session_id = create.json()["session_id"]
-    iteration_id = client.get(
-        f"/api/v1/session/{session_id}/pending"
-    ).json()["transition"]["id"]
+    iteration_id = client.get(f"/api/v1/session/{session_id}/pending").json()["transition"]["id"]
     resp = client.post(
         f"/api/v1/session/{session_id}/nudge",
         json={"iteration_id": iteration_id, "action": "skip"},

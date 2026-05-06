@@ -1,17 +1,29 @@
-"""Tests for the v2 workflow engine."""
+"""
+--------------------------------------------------------------------------------
+FILE:        test_workflow.py
+PATH:        ~/projects/agent-broker/tests/test_workflow.py
+DESCRIPTION: Workflow engine regression tests for the Delphi v2 state machine.
+
+CHANGELOG:
+2026-05-06 14:02      Codex      [Refactor] Rename operator permanently hidden thread config fixture.
+2026-05-06 13:41      Codex      [Feature] Cover v2 worker selection excluding probe identities.
+2026-05-06 13:37      Codex      [Refactor] Add operator authority config and explicit probe flags to workflow fixture.
+2026-05-06 09:47      Codex      [Refactor] Add explicit peer participant fields to workflow registry fixture.
+2026-05-06 08:30      Codex      [Refactor] Rename package to agent_broker and harden fail-loud Phase 1 broker boundaries.
+--------------------------------------------------------------------------------
+
+Tests for the v2 workflow engine."""
 
 from __future__ import annotations
 
 import importlib
 import json
-import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Fixture: workflow needs two workers per host (the shared conftest puts
@@ -23,11 +35,11 @@ import pytest
 
 def _reload_modules() -> tuple[object, object, object]:
     for name in sorted(sys.modules, reverse=True):
-        if name == "delphi_broker" or name.startswith("delphi_broker."):
+        if name == "agent_broker" or name.startswith("agent_broker."):
             sys.modules.pop(name, None)
-    config = importlib.import_module("delphi_broker.config")
-    database = importlib.import_module("delphi_broker.database")
-    workflow = importlib.import_module("delphi_broker.workflow")
+    config = importlib.import_module("agent_broker.config")
+    database = importlib.import_module("agent_broker.database")
+    workflow = importlib.import_module("agent_broker.workflow")
     return config, database, workflow
 
 
@@ -42,37 +54,64 @@ def wf_layer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple]
                         "agent_id": "prod-claude",
                         "host": "prod",
                         "role": "worker",
+                        "participant_type": "agent",
+                        "transport_type": "mcp",
+                        "is_probe": False,
                         "secret": "a" * 64,
                     },
                     {
                         "agent_id": "prod-codex",
                         "host": "prod",
                         "role": "worker",
+                        "participant_type": "agent",
+                        "transport_type": "mcp",
+                        "is_probe": False,
                         "secret": "b" * 64,
                     },
                     {
                         "agent_id": "dev-claude",
                         "host": "dev",
                         "role": "worker",
+                        "participant_type": "agent",
+                        "transport_type": "mcp",
+                        "is_probe": False,
                         "secret": "c" * 64,
                     },
                     {
                         "agent_id": "dev-codex",
                         "host": "dev",
                         "role": "worker",
+                        "participant_type": "agent",
+                        "transport_type": "mcp",
+                        "is_probe": False,
                         "secret": "d" * 64,
                     },
                     {
                         "agent_id": "flow-claude",
                         "host": "flow",
                         "role": "arbitrator",
+                        "participant_type": "agent",
+                        "transport_type": "mcp",
+                        "is_probe": False,
                         "secret": "e" * 64,
                     },
                     {
                         "agent_id": "exec-codex",
                         "host": "exec",
                         "role": "executor",
+                        "participant_type": "agent",
+                        "transport_type": "mcp",
+                        "is_probe": False,
                         "secret": "f" * 64,
+                    },
+                    {
+                        "agent_id": "operator",
+                        "host": "pi",
+                        "role": "operator",
+                        "participant_type": "operator",
+                        "transport_type": "http",
+                        "is_probe": False,
+                        "secret": "g" * 64,
                     },
                 ]
             }
@@ -80,8 +119,28 @@ def wf_layer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple]
         encoding="utf-8",
     )
     db_path = tmp_path / "broker.sqlite"
+    permanently_hidden_threads_path = tmp_path / "operator_permanently_hidden_threads.json"
+    permanently_hidden_threads_path.write_text(
+        json.dumps({"_meta": {"changelog": []}, "thread_ids": []}),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("DELPHI_AGENTS_PATH", str(agents_path))
+    monkeypatch.setenv("DELPHI_AGENT_SECRETS_PATH", str(tmp_path / "agent-secrets.json"))
+    monkeypatch.setenv(
+        "OPERATOR_PERMANENTLY_HIDDEN_THREADS_PATH", str(permanently_hidden_threads_path)
+    )
+    monkeypatch.setenv("OPERATOR_PARTICIPANT_ID", "operator")
     monkeypatch.setenv("DELPHI_DB_PATH", str(db_path))
+    monkeypatch.setenv("DELPHI_HOST", "127.0.0.1")
+    monkeypatch.setenv("DELPHI_PORT", "8420")
+    monkeypatch.setenv("DELPHI_MCP_HOST_REGISTRY", "127.0.0.1:*,localhost:*")
+    monkeypatch.setenv(
+        "DELPHI_MCP_ORIGIN_REGISTRY",
+        "http://127.0.0.1:8420,http://localhost:8420",
+    )
+    monkeypatch.setenv("DELPHI_WEB_SECURE", "false")
+    monkeypatch.setenv("DELPHI_NUDGE_SWEEP_ENABLED", "false")
+    monkeypatch.setenv("DELPHI_MCP_SESSION_MANAGER_ENABLED", "false")
     monkeypatch.setenv("DELPHI_ARBITRATOR_AGENT_ID", "flow-claude")
     monkeypatch.setenv("DELPHI_EXECUTOR_AGENT_ID", "exec-codex")
     config, database, workflow = _reload_modules()
@@ -97,9 +156,7 @@ def wf_layer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple]
 # ---------------------------------------------------------------------------
 
 
-def _drive_iteration_to_response(
-    db, conn, iteration_id, *, output, self_assessment, rationale="r"
-):
+def _drive_iteration_to_response(db, conn, iteration_id, *, output, self_assessment, rationale="r"):
     """Skip nudge if needed, then record a destination response directly."""
     iteration = db.get_iteration(conn, iteration_id)
     if iteration["status"] == "awaiting_nudge":
@@ -167,6 +224,22 @@ def _converge_round_1_host(workflow, db, conn, session_id, host):
     return rnd
 
 
+def test_worker_selection_excludes_probe_identities(wf_layer):
+    _config, _db, workflow, conn = wf_layer
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """INSERT INTO agents
+              (agent_id, host, role, is_probe, first_seen, last_seen)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        ("prod-probe", "prod", "worker", 1, now, now),
+    )
+    conn.commit()
+
+    assert workflow._worker_hosts(conn) == ["dev", "prod"]
+    assert "prod-probe" not in workflow._workers_on_host(conn, "prod")
+    assert "prod-probe" not in workflow._all_workers(conn)
+
+
 # ---------------------------------------------------------------------------
 # 1-3. Pure helpers
 # ---------------------------------------------------------------------------
@@ -194,10 +267,7 @@ def test_detect_oscillation_flags_low_similarity_pair(wf_layer):
         is False
     )
     assert (
-        workflow.detect_oscillation(
-            ["alpha bravo charlie delta echo foxtrot golf", "zzz"]
-        )
-        is True
+        workflow.detect_oscillation(["alpha bravo charlie delta echo foxtrot golf", "zzz"]) is True
     )
 
 
@@ -382,31 +452,45 @@ def test_cross_host_irreconcilable_escalates_before_round_2(wf_layer):
     session = workflow.start_session(conn, problem_text="ship it")
     # Prod converges on text A. Dev converges on wildly-different text B.
     prod_text = "short"
-    dev_text = (
-        "very long entirely different content with no words in common at all forty seven"
-    )
+    dev_text = "very long entirely different content with no words in common at all forty seven"
     prod_round = _round_for_host(db, conn, session["id"], "prod")
     p1 = _latest_iter(db, conn, prod_round["id"])
     _skip_nudge_then_emit(
-        workflow, db, conn, p1["id"],
-        output=prod_text, self_assessment="more_work_needed",
+        workflow,
+        db,
+        conn,
+        p1["id"],
+        output=prod_text,
+        self_assessment="more_work_needed",
     )
     p2 = _latest_iter(db, conn, prod_round["id"])
     _skip_nudge_then_emit(
-        workflow, db, conn, p2["id"],
-        output=prod_text, self_assessment="converged",
+        workflow,
+        db,
+        conn,
+        p2["id"],
+        output=prod_text,
+        self_assessment="converged",
     )
 
     dev_round = _round_for_host(db, conn, session["id"], "dev")
     d1 = _latest_iter(db, conn, dev_round["id"])
     _skip_nudge_then_emit(
-        workflow, db, conn, d1["id"],
-        output=dev_text, self_assessment="more_work_needed",
+        workflow,
+        db,
+        conn,
+        d1["id"],
+        output=dev_text,
+        self_assessment="more_work_needed",
     )
     d2 = _latest_iter(db, conn, dev_round["id"])
     _skip_nudge_then_emit(
-        workflow, db, conn, d2["id"],
-        output=dev_text, self_assessment="converged",
+        workflow,
+        db,
+        conn,
+        d2["id"],
+        output=dev_text,
+        self_assessment="converged",
     )
     assert db.get_session(conn, session["id"])["status"] == "escalated"
     # No round_2 should have been spawned.
@@ -429,7 +513,10 @@ def _converge_session_to_round_3(workflow, db, conn, *, problem="ship it"):
     arb = next(r for r in rounds if r["round_type"] == "cross_host_arbitration")
     arb_iter = _latest_iter(db, conn, arb["id"])
     _skip_nudge_then_emit(
-        workflow, db, conn, arb_iter["id"],
+        workflow,
+        db,
+        conn,
+        arb_iter["id"],
         output="FLOW_SYNTHESIS_v1",
         self_assessment="converged",
     )
@@ -507,12 +594,20 @@ def test_rejection_triggers_mediation_round(wf_layer):
 
     for reviewer in ["prod-claude", "prod-codex", "dev-claude"]:
         workflow.on_review_emitted(
-            conn, round_id=review_round["id"], reviewer_agent=reviewer,
-            decision="approve", comments=None, rationale="lgtm",
+            conn,
+            round_id=review_round["id"],
+            reviewer_agent=reviewer,
+            decision="approve",
+            comments=None,
+            rationale="lgtm",
         )
     workflow.on_review_emitted(
-        conn, round_id=review_round["id"], reviewer_agent="dev-codex",
-        decision="reject", comments="tone is off", rationale="too terse",
+        conn,
+        round_id=review_round["id"],
+        reviewer_agent="dev-codex",
+        decision="reject",
+        comments="tone is off",
+        rationale="too terse",
     )
     refreshed = db.get_session(conn, session["id"])
     assert refreshed["status"] == "round_2"
@@ -537,29 +632,43 @@ def test_two_failed_mediations_trigger_full_restart(wf_layer):
     def _run_review_round_with_one_reject():
         rounds = db.list_rounds_for_session(conn, session["id"])
         review = [
-            r for r in rounds
+            r
+            for r in rounds
             if r["round_type"] == "multi_agent_review" and r["status"] != "complete"
         ][-1]
         for reviewer in ["prod-claude", "prod-codex", "dev-claude"]:
             workflow.on_review_emitted(
-                conn, round_id=review["id"], reviewer_agent=reviewer,
-                decision="approve", comments=None, rationale="lgtm",
+                conn,
+                round_id=review["id"],
+                reviewer_agent=reviewer,
+                decision="approve",
+                comments=None,
+                rationale="lgtm",
             )
         workflow.on_review_emitted(
-            conn, round_id=review["id"], reviewer_agent="dev-codex",
-            decision="reject", comments="still off", rationale="meh",
+            conn,
+            round_id=review["id"],
+            reviewer_agent="dev-codex",
+            decision="reject",
+            comments="still off",
+            rationale="meh",
         )
 
     def _arbitrator_emits():
         rounds = db.list_rounds_for_session(conn, session["id"])
         arb = [
-            r for r in rounds
+            r
+            for r in rounds
             if r["round_type"] == "cross_host_arbitration" and r["status"] != "complete"
         ][-1]
         latest = _latest_iter(db, conn, arb["id"])
         _skip_nudge_then_emit(
-            workflow, db, conn, latest["id"],
-            output="FLOW_v_revised", self_assessment="converged",
+            workflow,
+            db,
+            conn,
+            latest["id"],
+            output="FLOW_v_revised",
+            self_assessment="converged",
         )
 
     # First rejection -> mediation #1
@@ -575,8 +684,7 @@ def test_two_failed_mediations_trigger_full_restart(wf_layer):
     assert refreshed["status"] == "round_1"
     rounds = db.list_rounds_for_session(conn, session["id"])
     same_host_in_progress = [
-        r for r in rounds
-        if r["round_type"] == "same_host_pair" and r["status"] == "in_progress"
+        r for r in rounds if r["round_type"] == "same_host_pair" and r["status"] == "in_progress"
     ]
     assert len(same_host_in_progress) == 2  # one per host, fresh round_1
 
@@ -592,8 +700,12 @@ def _walk_to_executing(workflow, db, conn):
     review_round = next(r for r in rounds if r["round_type"] == "multi_agent_review")
     for reviewer in ["prod-claude", "prod-codex", "dev-claude", "dev-codex"]:
         workflow.on_review_emitted(
-            conn, round_id=review_round["id"], reviewer_agent=reviewer,
-            decision="approve", comments=None, rationale="lgtm",
+            conn,
+            round_id=review_round["id"],
+            reviewer_agent=reviewer,
+            decision="approve",
+            comments=None,
+            rationale="lgtm",
         )
     rounds = db.list_rounds_for_session(conn, session["id"])
     exec_round = next(r for r in rounds if r["round_type"] == "execute")
@@ -674,22 +786,28 @@ def test_resolve_escalation_force_converge_and_abort(wf_layer):
     prod_round = _round_for_host(db, conn, session["id"], "prod")
     p1 = _latest_iter(db, conn, prod_round["id"])
     _skip_nudge_then_emit(
-        workflow, db, conn, p1["id"],
-        output="aaaaaaaaaa", self_assessment="more_work_needed",
+        workflow,
+        db,
+        conn,
+        p1["id"],
+        output="aaaaaaaaaa",
+        self_assessment="more_work_needed",
     )
     p2 = _latest_iter(db, conn, prod_round["id"])
     _skip_nudge_then_emit(
-        workflow, db, conn, p2["id"],
-        output="zzzzzzzzz xxxxxxxxxxx", self_assessment="more_work_needed",
+        workflow,
+        db,
+        conn,
+        p2["id"],
+        output="zzzzzzzzz xxxxxxxxxxx",
+        self_assessment="more_work_needed",
     )
     assert db.get_session(conn, session["id"])["status"] == "escalated"
 
     # Converge dev so force_converge can flip prod and proceed to round_2.
     _converge_round_1_host(workflow, db, conn, session["id"], "dev")
 
-    refreshed = workflow.resolve_escalation(
-        conn, session["id"], action="force_converge"
-    )
+    refreshed = workflow.resolve_escalation(conn, session["id"], action="force_converge")
     # Prod outcome should now be the latest output ("zzzzzzzzz xxxxxxxxxxx").
     prod_after = db.get_round(conn, prod_round["id"])
     assert prod_after["status"] == "converged"
@@ -712,15 +830,11 @@ def test_resolve_escalation_force_converge_and_abort(wf_layer):
 def test_resolve_escalation_skip_agent_records_skipped_reviewer(wf_layer):
     _, db, workflow, conn = wf_layer
     session = workflow.start_session(conn, problem_text="x")
-    workflow.resolve_escalation(
-        conn, session["id"], action="skip_agent", agent_id="dev-codex"
-    )
+    workflow.resolve_escalation(conn, session["id"], action="skip_agent", agent_id="dev-codex")
     skipped = db.get_skipped_reviewers(conn, session["id"])
     assert skipped == ["dev-codex"]
     # Idempotent — a second skip is a no-op.
-    workflow.resolve_escalation(
-        conn, session["id"], action="skip_agent", agent_id="dev-codex"
-    )
+    workflow.resolve_escalation(conn, session["id"], action="skip_agent", agent_id="dev-codex")
     assert db.get_skipped_reviewers(conn, session["id"]) == ["dev-codex"]
     # Unknown action raises.
     with pytest.raises(ValueError):
@@ -759,8 +873,12 @@ def test_round_3_respects_skipped_reviewers(wf_layer):
     # Only three approvals required now.
     for reviewer in ["prod-claude", "prod-codex", "dev-claude"]:
         workflow.on_review_emitted(
-            conn, round_id=review_round["id"], reviewer_agent=reviewer,
-            decision="approve", comments=None, rationale="lgtm",
+            conn,
+            round_id=review_round["id"],
+            reviewer_agent=reviewer,
+            decision="approve",
+            comments=None,
+            rationale="lgtm",
         )
     refreshed = db.get_session(conn, session["id"])
     assert refreshed["status"] == "executing"

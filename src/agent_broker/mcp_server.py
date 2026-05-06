@@ -1,4 +1,16 @@
-"""MCP tools for the v2 broker.
+"""
+--------------------------------------------------------------------------------
+FILE:        mcp_server.py
+PATH:        ~/projects/agent-broker/src/agent_broker/mcp_server.py
+DESCRIPTION: HMAC-authenticated MCP tool registration for Delphi v2 and v3 agent surfaces.
+
+CHANGELOG:
+2026-05-06 13:54      Codex      [Fix] Exclude probe identities from Delphi reviewer eligibility.
+2026-05-06 09:55      Codex      [Feature] Register Phase 6 peer messaging MCP tools.
+2026-05-06 08:30      Codex      [Refactor] Rename package to agent_broker and harden fail-loud Phase 1 broker boundaries.
+--------------------------------------------------------------------------------
+
+MCP tools for the v2 broker.
 
 Exposes four tools to agents:
 
@@ -22,7 +34,6 @@ from __future__ import annotations
 
 import hmac
 import sqlite3
-import os
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -30,42 +41,23 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from . import database as db
 from . import workflow
-from .config import AGENT_SECRETS, ARBITRATOR_AGENT_ID, DB_PATH, EXECUTOR_AGENT_ID
-
-# DNS-rebinding protection in FastMCP defaults to localhost-only, which
-# blocks every agent reaching us over Tailscale (Host header = the broker's
-# tailnet IP). The HMAC + Tailscale-mesh boundary already authenticates
-# agents, so we allow all hosts by default; override via env if you want
-# stricter isolation.
-_allowed_hosts_env = os.getenv("DELPHI_ALLOWED_HOSTS", "*").strip()
-_allowed_hosts = (
-    ["*"] if _allowed_hosts_env == "*"
-    else [h.strip() for h in _allowed_hosts_env.split(",") if h.strip()]
-)
-_allowed_origins_env = os.getenv("DELPHI_ALLOWED_ORIGINS", "*").strip()
-_allowed_origins = (
-    ["*"] if _allowed_origins_env == "*"
-    else [o.strip() for o in _allowed_origins_env.split(",") if o.strip()]
+from .config import (
+    AGENT_SECRETS,
+    ARBITRATOR_AGENT_ID,
+    DB_PATH,
+    EXECUTOR_AGENT_ID,
+    MCP_HOST_REGISTRY,
+    MCP_ORIGIN_REGISTRY,
 )
 
 mcp = FastMCP(
-    "delphi-broker",
+    "agent-broker",
     transport_security=TransportSecuritySettings(
-        enable_dns_rebinding_protection=(_allowed_hosts != ["*"]),
-        allowed_hosts=_allowed_hosts,
-        allowed_origins=_allowed_origins,
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=list(MCP_HOST_REGISTRY),
+        allowed_origins=list(MCP_ORIGIN_REGISTRY),
     ),
 )
-
-# Phase-1 push spike: register four test tools that exercise different
-# server->client notification paths. Used to empirically validate which
-# wake-up primitives surface in Claude Code / Codex MCP clients before
-# we commit to a v3 push design. Spike tools are unauthenticated for
-# convenience -- they're informational, not state-mutating.
-# v3 production tools (delphi_v3_*) are registered at the bottom of the
-# file, after _verify and _conn helpers are defined.
-from .v3.push_spike import register_spike_tools  # noqa: E402
-register_spike_tools(mcp)
 
 
 # ---------------------------------------------------------------------------
@@ -125,15 +117,11 @@ def _format_inbox_iteration(conn: sqlite3.Connection, iteration: dict) -> dict:
     }
 
 
-def _open_review_requests_for_agent(
-    conn: sqlite3.Connection, agent_id: str
-) -> list[dict]:
+def _open_review_requests_for_agent(conn: sqlite3.Connection, agent_id: str) -> list[dict]:
     """Round-3 review rounds where this agent is expected and hasn't reviewed."""
-    cur = conn.execute(
-        """SELECT r.* FROM rounds r
+    cur = conn.execute("""SELECT r.* FROM rounds r
             WHERE r.round_type = 'multi_agent_review'
-              AND r.status = 'in_progress'"""
-    )
+              AND r.status = 'in_progress'""")
     out: list[dict] = []
     for row in cur.fetchall():
         rnd = dict(row)
@@ -147,7 +135,7 @@ def _open_review_requests_for_agent(
         # workers minus skipped). Mirror that here without importing the
         # internal helper from workflow.
         worker_cur = conn.execute(
-            "SELECT agent_id FROM agents WHERE role = 'worker' ORDER BY agent_id ASC"
+            "SELECT agent_id FROM agents WHERE role = 'worker' AND is_probe = 0 ORDER BY agent_id ASC"
         )
         workers = [w["agent_id"] for w in worker_cur.fetchall()]
         expected = [w for w in workers if w not in skipped]
@@ -339,8 +327,7 @@ def delphi_executor_emit(
     try:
         if agent_id != EXECUTOR_AGENT_ID:
             return _auth_failed(
-                f"agent {agent_id!r} is not the configured executor "
-                f"({EXECUTOR_AGENT_ID!r})"
+                f"agent {agent_id!r} is not the configured executor " f"({EXECUTOR_AGENT_ID!r})"
             )
         err = _verify(
             conn,
@@ -363,8 +350,7 @@ def delphi_executor_emit(
             return _auth_failed(f"unknown iteration {request_id!r}")
         if iteration["destination_agent"] != agent_id:
             return _auth_failed(
-                f"agent {agent_id!r} is not the destination for iteration "
-                f"{request_id!r}"
+                f"agent {agent_id!r} is not the destination for iteration " f"{request_id!r}"
             )
         db.touch_agent(conn, agent_id)
         try:
@@ -387,7 +373,10 @@ def delphi_executor_emit(
 # scope. The v3 module deliberately accepts these as parameters to stay
 # decoupled from module-level state.
 from .v3.mcp_tools import register_v3_tools  # noqa: E402
+from .peer.peer_mcp_tools import register_peer_tools  # noqa: E402
+
 register_v3_tools(mcp, _verify, _conn, AGENT_SECRETS)
+register_peer_tools(mcp, _verify, _conn, AGENT_SECRETS)
 
 
 # Re-exported for tests: sentinel constants the test suite asserts against.

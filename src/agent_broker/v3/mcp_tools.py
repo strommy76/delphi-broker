@@ -1,4 +1,14 @@
-"""v3 MCP tools — orchestrator + worker surfaces.
+"""
+--------------------------------------------------------------------------------
+FILE:        mcp_tools.py
+PATH:        ~/projects/agent-broker/src/agent_broker/v3/mcp_tools.py
+DESCRIPTION: HMAC-authenticated MCP tools for Delphi v3 orchestrator and worker actions.
+
+CHANGELOG:
+2026-05-06 08:30      Codex      [Refactor] Rename package to agent_broker and harden fail-loud Phase 1 broker boundaries.
+--------------------------------------------------------------------------------
+
+v3 MCP tools — orchestrator + worker surfaces.
 
 Mounted on the existing FastMCP instance via register_v3_tools(mcp). All
 tools are HMAC-authenticated via the same _verify helper v2 uses; only
@@ -20,7 +30,6 @@ v2 actions need only to learn the v3 action names and field orders.
 
 from __future__ import annotations
 
-import sqlite3
 from typing import Any
 
 from . import database as v3db
@@ -49,12 +58,17 @@ def register_v3_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
         ),
     )
     def delphi_v3_get_pending_task(
-        agent_id: str, client_ts: str, signature: str,
+        agent_id: str,
+        client_ts: str,
+        signature: str,
     ) -> dict:
         conn = _conn()
         try:
             err = _verify(
-                conn, agent_id, client_ts, signature,
+                conn,
+                agent_id,
+                client_ts,
+                signature,
                 ("v3_get_pending_task", agent_id, client_ts),
             )
             if err:
@@ -62,8 +76,7 @@ def register_v3_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
 
             tasks = v3db.list_tasks(conn, orchestrator_id=agent_id, limit=200)
             active = [
-                t for t in tasks
-                if t["status"] in ("new", "dispatched", "aggregating", "escalated")
+                t for t in tasks if t["status"] in ("new", "dispatched", "aggregating", "escalated")
             ]
             return {"tasks": active}
         finally:
@@ -79,14 +92,21 @@ def register_v3_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
         ),
     )
     def delphi_v3_dispatch(
-        agent_id: str, client_ts: str, signature: str,
-        task_id: str, worker_id: str, subtask_text: str,
+        agent_id: str,
+        client_ts: str,
+        signature: str,
+        task_id: str,
+        worker_id: str,
+        subtask_text: str,
         subtask_json: dict | None = None,
     ) -> dict:
         conn = _conn()
         try:
             err = _verify(
-                conn, agent_id, client_ts, signature,
+                conn,
+                agent_id,
+                client_ts,
+                signature,
                 ("v3_dispatch", agent_id, client_ts, task_id, worker_id),
             )
             if err:
@@ -110,8 +130,11 @@ def register_v3_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
                 }
             try:
                 dispatch_id = v3db.create_dispatch(
-                    conn, task_id=task_id, worker_id=worker_id,
-                    subtask_text=subtask_text, subtask_json=subtask_json,
+                    conn,
+                    task_id=task_id,
+                    worker_id=worker_id,
+                    subtask_text=subtask_text,
+                    subtask_json=subtask_json,
                     actor=agent_id,
                 )
             except ValueError as exc:
@@ -134,12 +157,18 @@ def register_v3_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
         ),
     )
     def delphi_v3_collect_outputs(
-        agent_id: str, client_ts: str, signature: str, task_id: str,
+        agent_id: str,
+        client_ts: str,
+        signature: str,
+        task_id: str,
     ) -> dict:
         conn = _conn()
         try:
             err = _verify(
-                conn, agent_id, client_ts, signature,
+                conn,
+                agent_id,
+                client_ts,
+                signature,
                 ("v3_collect_outputs", agent_id, client_ts, task_id),
             )
             if err:
@@ -176,15 +205,22 @@ def register_v3_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
         ),
     )
     def delphi_v3_aggregate(
-        agent_id: str, client_ts: str, signature: str,
-        task_id: str, synthesis_text: str, decision: str,
+        agent_id: str,
+        client_ts: str,
+        signature: str,
+        task_id: str,
+        synthesis_text: str,
+        decision: str,
         refine_directive: str | None = None,
         synthesis_json: dict | None = None,
     ) -> dict:
         conn = _conn()
         try:
             err = _verify(
-                conn, agent_id, client_ts, signature,
+                conn,
+                agent_id,
+                client_ts,
+                signature,
                 ("v3_aggregate", agent_id, client_ts, task_id, decision),
             )
             if err:
@@ -200,7 +236,8 @@ def register_v3_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
                 }
             try:
                 agg_id = v3db.create_aggregation(
-                    conn, task_id=task_id,
+                    conn,
+                    task_id=task_id,
                     synthesis_text=synthesis_text,
                     synthesis_json=synthesis_json,
                     decision=decision,
@@ -233,12 +270,17 @@ def register_v3_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
         ),
     )
     def delphi_v3_poll_dispatches(
-        agent_id: str, client_ts: str, signature: str,
+        agent_id: str,
+        client_ts: str,
+        signature: str,
     ) -> dict:
         conn = _conn()
         try:
             err = _verify(
-                conn, agent_id, client_ts, signature,
+                conn,
+                agent_id,
+                client_ts,
+                signature,
                 ("v3_poll_dispatches", agent_id, client_ts),
             )
             if err:
@@ -251,16 +293,18 @@ def register_v3_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
             results: list[dict[str, Any]] = []
             for d in pending + in_progress:
                 task = v3db.get_task(conn, d["task_id"])
-                results.append({
-                    "dispatch_id": d["id"],
-                    "task_id": d["task_id"],
-                    "task_title": task["title"] if task else None,
-                    "task_problem_text": task["problem_text"] if task else None,
-                    "subtask_text": d["subtask_text"],
-                    "subtask_json": d["subtask_json"],
-                    "status": d["status"],
-                    "dispatched_at": d["dispatched_at"],
-                })
+                results.append(
+                    {
+                        "dispatch_id": d["id"],
+                        "task_id": d["task_id"],
+                        "task_title": task["title"] if task else None,
+                        "task_problem_text": task["problem_text"] if task else None,
+                        "subtask_text": d["subtask_text"],
+                        "subtask_json": d["subtask_json"],
+                        "status": d["status"],
+                        "dispatched_at": d["dispatched_at"],
+                    }
+                )
             return {"dispatches": results}
         finally:
             conn.close()
@@ -274,14 +318,20 @@ def register_v3_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
         ),
     )
     def delphi_v3_emit_output(
-        agent_id: str, client_ts: str, signature: str,
-        dispatch_id: str, output_text: str,
+        agent_id: str,
+        client_ts: str,
+        signature: str,
+        dispatch_id: str,
+        output_text: str,
         output_json: dict | None = None,
     ) -> dict:
         conn = _conn()
         try:
             err = _verify(
-                conn, agent_id, client_ts, signature,
+                conn,
+                agent_id,
+                client_ts,
+                signature,
                 ("v3_emit_output", agent_id, client_ts, dispatch_id),
             )
             if err:
@@ -305,8 +355,10 @@ def register_v3_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
                 }
             try:
                 output_id = v3db.record_worker_output(
-                    conn, dispatch_id=dispatch_id,
-                    output_text=output_text, output_json=output_json,
+                    conn,
+                    dispatch_id=dispatch_id,
+                    output_text=output_text,
+                    output_json=output_json,
                 )
             except ValueError as exc:
                 return {"error": "invalid", "reason": str(exc)}

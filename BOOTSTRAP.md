@@ -1,7 +1,7 @@
-# Delphi Broker — Agent Bootstrap Guide
+# Agent Broker — Agent Bootstrap Guide
 
 **Purpose:** Step-by-step instructions for CLI agents to self-configure as
-Delphi Broker clients. Read this file and execute the steps for your assigned
+Agent Broker clients. Read this file and execute the steps for your assigned
 agent identity.
 
 The architecture this guide configures you for is described in
@@ -122,7 +122,7 @@ Do NOT overwrite existing entries — add alongside them.
 ```json
 {
   "mcpServers": {
-    "delphi-broker": {
+    "agent-broker": {
       "type": "url",
       "url": "http://<BROKER_IP>:8420/mcp"
     }
@@ -159,7 +159,7 @@ MCP tools.
 ### Step 1: Restart your CLI to pick up the MCP config
 
 If your CLI was already running when you edited `~/.claude/settings.json`,
-restart it now so the `delphi-broker` server is loaded.
+restart it now so the `agent-broker` server is loaded.
 
 ### Step 2: Call `delphi_poll_inbox`
 
@@ -268,7 +268,7 @@ If you are an agent on the broker host, one of you must also start the broker
 before Phase 2. Coordinate with the operator on which agent does this.
 
 ```bash
-cd ~/delphi-broker  # or wherever the repo is cloned
+cd ~/agent-broker  # or wherever the repo is cloned
 
 # Ensure .env exists with DELPHI_OPERATOR_TOKEN set
 test -f .env || { echo "ERROR: .env not found"; exit 1; }
@@ -281,12 +281,12 @@ test -f config/agents.json || { echo "ERROR: config/agents.json not found"; exit
 mkdir -p data
 
 # Build and start
-docker compose -p delphi-broker up -d --build
+docker compose -p agent-broker up -d --build
 
 # Verify the container is up (no public unauth endpoint to probe in v2 —
 # operator should hit /web/ with the operator token)
 sleep 3
-docker compose -p delphi-broker ps
+docker compose -p agent-broker ps
 ```
 
 ---

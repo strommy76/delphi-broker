@@ -1,4 +1,14 @@
-"""Phone-friendly web UI for the v2 broker.
+"""
+--------------------------------------------------------------------------------
+FILE:        web.py
+PATH:        ~/projects/agent-broker/src/agent_broker/routes/web.py
+DESCRIPTION: Phone-friendly operator web UI for Delphi v2 workflows.
+
+CHANGELOG:
+2026-05-06 08:30      Codex      [Refactor] Rename package to agent_broker and harden fail-loud Phase 1 broker boundaries.
+--------------------------------------------------------------------------------
+
+Phone-friendly web UI for the v2 broker.
 
 Cookie-based auth: a single operator token (the same one used by the REST
 header `X-Operator-Token`) is verified at `/web/login`. On success an
@@ -74,9 +84,7 @@ def _validate_session_id(session_id: str) -> None:
 
 @router.get("/login", response_class=HTMLResponse)
 def login_form(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(
-        request=request, name="login.html", context={"error": None}
-    )
+    return templates.TemplateResponse(request=request, name="login.html", context={"error": None})
 
 
 @router.post("/login")
@@ -88,9 +96,7 @@ def login_submit(password: str = Form(...)) -> RedirectResponse:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc
     if not secrets.compare_digest(password, expected):
-        return RedirectResponse(
-            "/web/login?error=1", status_code=status.HTTP_303_SEE_OTHER
-        )
+        return RedirectResponse("/web/login?error=1", status_code=status.HTTP_303_SEE_OTHER)
     response = RedirectResponse("/web/", status_code=status.HTTP_303_SEE_OTHER)
     response.set_cookie(
         OP_TOKEN_COOKIE,
@@ -116,9 +122,7 @@ def logout() -> RedirectResponse:
 
 
 @router.get("/", response_class=HTMLResponse)
-def sessions_list(
-    request: Request, op_token: Optional[str] = Cookie(default=None)
-):
+def sessions_list(request: Request, op_token: Optional[str] = Cookie(default=None)):
     if not _is_authed(op_token):
         return _login_redirect()
     conn = _conn()
@@ -134,9 +138,7 @@ def sessions_list(
 
 
 @router.get("/sessions/new", response_class=HTMLResponse)
-def session_new_form(
-    request: Request, op_token: Optional[str] = Cookie(default=None)
-):
+def session_new_form(request: Request, op_token: Optional[str] = Cookie(default=None)):
     if not _is_authed(op_token):
         return _login_redirect()
     return templates.TemplateResponse(
@@ -165,14 +167,10 @@ def session_new_submit(
             nudge_window_secs=nudge_window_secs,
         )
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     finally:
         conn.close()
-    return RedirectResponse(
-        f"/web/session/{session['id']}", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(f"/web/session/{session['id']}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.get("/session/{session_id}", response_class=HTMLResponse)
@@ -237,14 +235,10 @@ def session_nudge(
     try:
         db.apply_nudge(conn, iteration_id, nudge_text)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     finally:
         conn.close()
-    return RedirectResponse(
-        f"/web/session/{session_id}", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(f"/web/session/{session_id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/session/{session_id}/skip")
@@ -260,20 +254,14 @@ def session_skip(
     try:
         db.skip_nudge(conn, iteration_id)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     finally:
         conn.close()
-    return RedirectResponse(
-        f"/web/session/{session_id}", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(f"/web/session/{session_id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/session/{session_id}/abort")
-def session_abort(
-    session_id: str, op_token: Optional[str] = Cookie(default=None)
-):
+def session_abort(session_id: str, op_token: Optional[str] = Cookie(default=None)):
     if not _is_authed(op_token):
         return _login_redirect()
     _validate_session_id(session_id)
@@ -285,9 +273,7 @@ def session_abort(
                 db.update_round_status(conn, rnd["id"], "aborted")
         db.update_session_status(conn, session_id, "aborted")
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     finally:
         conn.close()
     return RedirectResponse("/web/", status_code=status.HTTP_303_SEE_OTHER)
@@ -311,12 +297,8 @@ def session_transcript(
                 detail=f"session {session_id!r} not found",
             )
         rounds = db.list_rounds_for_session(conn, session_id)
-        iterations_by_round = {
-            r["id"]: db.list_iterations_for_round(conn, r["id"]) for r in rounds
-        }
-        reviews_by_round = {
-            r["id"]: db.list_reviews_for_round(conn, r["id"]) for r in rounds
-        }
+        iterations_by_round = {r["id"]: db.list_iterations_for_round(conn, r["id"]) for r in rounds}
+        reviews_by_round = {r["id"]: db.list_reviews_for_round(conn, r["id"]) for r in rounds}
         return templates.TemplateResponse(
             request=request,
             name="session_transcript.html",
@@ -381,11 +363,7 @@ def session_escalation_resolve(
             nudge_text=nudge_text or None,
         )
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     finally:
         conn.close()
-    return RedirectResponse(
-        f"/web/session/{session_id}", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(f"/web/session/{session_id}", status_code=status.HTTP_303_SEE_OTHER)

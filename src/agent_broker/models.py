@@ -1,4 +1,14 @@
-"""Pydantic models for the v2 iterative-pipeline data layer.
+"""
+--------------------------------------------------------------------------------
+FILE:        models.py
+PATH:        ~/projects/agent-broker/src/agent_broker/models.py
+DESCRIPTION: Pydantic models and enums for the Delphi v2 broker surfaces.
+
+CHANGELOG:
+2026-05-06 08:30      Codex      [Refactor] Rename package to agent_broker and harden fail-loud Phase 1 broker boundaries.
+--------------------------------------------------------------------------------
+
+Pydantic models for the v2 iterative-pipeline data layer.
 
 One model per persisted table, plus the enums that constrain status / role
 columns. These are imported by the API layer for request and response
@@ -12,7 +22,6 @@ from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, Field
-
 
 # ---------------------------------------------------------------------------
 # Enums

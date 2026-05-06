@@ -1,4 +1,15 @@
-"""Workflow engine for the v2 iterative-pipeline broker.
+"""
+--------------------------------------------------------------------------------
+FILE:        workflow.py
+PATH:        ~/projects/agent-broker/src/agent_broker/workflow.py
+DESCRIPTION: Workflow engine for the Delphi v2 iterative-pipeline state machine.
+
+CHANGELOG:
+2026-05-06 13:53      Codex      [Fix] Exclude probe identities from Delphi workflow worker selection.
+2026-05-06 08:30      Codex      [Refactor] Rename package to agent_broker and harden fail-loud Phase 1 broker boundaries.
+--------------------------------------------------------------------------------
+
+Workflow engine for the v2 iterative-pipeline broker.
 
 This module is the orchestrator that advances sessions through their state
 machine. It does NOT poll external agents — agents pull from their inbox
@@ -58,14 +69,10 @@ def normalize_for_similarity(text: str) -> str:
 
 
 def _similarity(a: str, b: str) -> float:
-    return SequenceMatcher(
-        None, normalize_for_similarity(a), normalize_for_similarity(b)
-    ).ratio()
+    return SequenceMatcher(None, normalize_for_similarity(a), normalize_for_similarity(b)).ratio()
 
 
-def is_converged(
-    prev_output: Optional[str], latest_output: str, latest_self_assess: str
-) -> bool:
+def is_converged(prev_output: Optional[str], latest_output: str, latest_self_assess: str) -> bool:
     """Hybrid: similarity >= 0.95 AND latest agent self-reports CONVERGED."""
     if prev_output is None:
         return False
@@ -87,17 +94,15 @@ def detect_oscillation(outputs: list[str]) -> bool:
 
 
 def _worker_hosts(conn: sqlite3.Connection) -> list[str]:
-    cur = conn.execute(
-        """SELECT DISTINCT host FROM agents
-            WHERE role = 'worker' ORDER BY host ASC"""
-    )
+    cur = conn.execute("""SELECT DISTINCT host FROM agents
+            WHERE role = 'worker' AND is_probe = 0 ORDER BY host ASC""")
     return [row["host"] for row in cur.fetchall()]
 
 
 def _workers_on_host(conn: sqlite3.Connection, host: str) -> list[str]:
     cur = conn.execute(
         """SELECT agent_id FROM agents
-            WHERE role = 'worker' AND host = ?
+            WHERE role = 'worker' AND is_probe = 0 AND host = ?
          ORDER BY agent_id ASC""",
         (host,),
     )
@@ -106,14 +111,12 @@ def _workers_on_host(conn: sqlite3.Connection, host: str) -> list[str]:
 
 def _all_workers(conn: sqlite3.Connection) -> list[str]:
     cur = conn.execute(
-        "SELECT agent_id FROM agents WHERE role = 'worker' ORDER BY agent_id ASC"
+        "SELECT agent_id FROM agents WHERE role = 'worker' AND is_probe = 0 ORDER BY agent_id ASC"
     )
     return [row["agent_id"] for row in cur.fetchall()]
 
 
-def _other_agent_on_host(
-    conn: sqlite3.Connection, host: str, current_agent: str
-) -> str:
+def _other_agent_on_host(conn: sqlite3.Connection, host: str, current_agent: str) -> str:
     """Return the worker on `host` that isn't `current_agent`.
 
     Raises ValueError unless exactly two workers exist on that host.
@@ -121,13 +124,11 @@ def _other_agent_on_host(
     workers = _workers_on_host(conn, host)
     if len(workers) != 2:
         raise ValueError(
-            f"host {host!r} must have exactly two workers, found {len(workers)}: "
-            f"{workers!r}"
+            f"host {host!r} must have exactly two workers, found {len(workers)}: " f"{workers!r}"
         )
     if current_agent not in workers:
         raise ValueError(
-            f"agent {current_agent!r} is not a worker on host {host!r} "
-            f"(workers: {workers!r})"
+            f"agent {current_agent!r} is not a worker on host {host!r} " f"(workers: {workers!r})"
         )
     return next(w for w in workers if w != current_agent)
 
@@ -155,9 +156,7 @@ def _spawn_iteration(
     )
 
 
-def _round_outcomes_per_host(
-    conn: sqlite3.Connection, session_id: str
-) -> dict[str, Optional[str]]:
+def _round_outcomes_per_host(conn: sqlite3.Connection, session_id: str) -> dict[str, Optional[str]]:
     """Map host -> outcome_text for the round_1 same_host_pair rounds."""
     rounds = db.list_rounds_for_session(conn, session_id)
     out: dict[str, Optional[str]] = {}
@@ -188,9 +187,7 @@ def _session_for_round(conn: sqlite3.Connection, round_id: str) -> dict:
     return session
 
 
-def _expected_reviewers_for_session(
-    conn: sqlite3.Connection, session_id: str
-) -> list[str]:
+def _expected_reviewers_for_session(conn: sqlite3.Connection, session_id: str) -> list[str]:
     """All workers minus this session's skipped_reviewers list."""
     skipped = set(db.get_skipped_reviewers(conn, session_id))
     return [w for w in _all_workers(conn) if w not in skipped]
@@ -216,11 +213,7 @@ def _format_mediation_input(
 
 def _outputs_for_round(conn: sqlite3.Connection, round_id: str) -> list[str]:
     iters = db.list_iterations_for_round(conn, round_id)
-    return [
-        i["destination_output"]
-        for i in iters
-        if i["destination_output"] is not None
-    ]
+    return [i["destination_output"] for i in iters if i["destination_output"] is not None]
 
 
 def _mediation_attempt_count(conn: sqlite3.Connection, session_id: str) -> int:
@@ -330,9 +323,7 @@ def on_destination_response(
     )
 
 
-def _advance_round_1(
-    conn: sqlite3.Connection, session: dict, rnd: dict
-) -> dict:
+def _advance_round_1(conn: sqlite3.Connection, session: dict, rnd: dict) -> dict:
     iters = db.list_iterations_for_round(conn, rnd["id"])
     completed = [i for i in iters if i["destination_output"] is not None]
     if not completed:
@@ -356,16 +347,12 @@ def _advance_round_1(
 
     prev_output = outputs[-2] if len(outputs) >= 2 else None
     if is_converged(prev_output, outputs[-1], latest["destination_self_assess"]):
-        db.update_round_status(
-            conn, rnd["id"], "converged", outcome_text=outputs[-1]
-        )
+        db.update_round_status(conn, rnd["id"], "converged", outcome_text=outputs[-1])
         return _maybe_advance_to_round_2(conn, session)
 
     # Continue iterating: source becomes the agent who just responded;
     # destination is the other agent on the same host.
-    next_destination = _other_agent_on_host(
-        conn, rnd["host"], latest["destination_agent"]
-    )
+    next_destination = _other_agent_on_host(conn, rnd["host"], latest["destination_agent"])
     _spawn_iteration(
         conn,
         round_id=rnd["id"],
@@ -396,16 +383,12 @@ def _maybe_advance_to_round_2(conn: sqlite3.Connection, session: dict) -> dict:
                     _similarity(outcome_values[i], outcome_values[j])
                     < CROSS_HOST_RECONCILABILITY_FLOOR
                 ):
-                    return db.update_session_status(
-                        conn, session["id"], "escalated"
-                    )
+                    return db.update_session_status(conn, session["id"], "escalated")
 
     return _spawn_round_2(conn, session, source_output=_format_arbitrator_input(outcomes))
 
 
-def _spawn_round_2(
-    conn: sqlite3.Connection, session: dict, *, source_output: str
-) -> dict:
+def _spawn_round_2(conn: sqlite3.Connection, session: dict, *, source_output: str) -> dict:
     rnd = db.create_round(
         conn,
         session_id=session["id"],
@@ -424,17 +407,13 @@ def _spawn_round_2(
     return db.update_session_status(conn, session["id"], "round_2")
 
 
-def _advance_round_2(
-    conn: sqlite3.Connection, session: dict, rnd: dict, output: str
-) -> dict:
+def _advance_round_2(conn: sqlite3.Connection, session: dict, rnd: dict, output: str) -> dict:
     """Arbitrator submitted; capture outcome and spawn round_3 reviews."""
     db.update_round_status(conn, rnd["id"], "complete", outcome_text=output)
     return _spawn_round_3(conn, session, source_output=output)
 
 
-def _spawn_round_3(
-    conn: sqlite3.Connection, session: dict, *, source_output: str
-) -> dict:
+def _spawn_round_3(conn: sqlite3.Connection, session: dict, *, source_output: str) -> dict:
     reviewers = _expected_reviewers_for_session(conn, session["id"])
     if not reviewers:
         raise ValueError(
@@ -497,7 +476,9 @@ def on_review_emitted(
         return db.get_session(conn, session["id"])
 
     reviews = db.list_reviews_for_round(conn, round_id)
-    rejections = [(r["reviewer_agent"], r["comments"]) for r in reviews if r["decision"] == "reject"]
+    rejections = [
+        (r["reviewer_agent"], r["comments"]) for r in reviews if r["decision"] == "reject"
+    ]
 
     if not rejections:
         db.update_round_status(conn, round_id, "complete")
@@ -552,9 +533,7 @@ def _restart_round_1_with_comments(
     for host in hosts:
         workers = _workers_on_host(conn, host)
         if len(workers) != 2:
-            raise ValueError(
-                f"host {host!r} must have exactly two workers, found {len(workers)}"
-            )
+            raise ValueError(f"host {host!r} must have exactly two workers, found {len(workers)}")
         rnd = db.create_round(
             conn,
             session_id=session["id"],
@@ -590,9 +569,7 @@ def on_executor_emitted(
     if rnd is None:
         raise ValueError(f"iteration {iteration_id!r} has missing round")
     if rnd["round_type"] != "execute":
-        raise ValueError(
-            f"on_executor_emitted called for round_type {rnd['round_type']!r}"
-        )
+        raise ValueError(f"on_executor_emitted called for round_type {rnd['round_type']!r}")
     session = db.get_session(conn, rnd["session_id"])
     if session is None:
         raise ValueError(f"round {rnd['id']!r} has missing session")
@@ -669,9 +646,7 @@ def resolve_escalation(
     Returns the updated session dict.
     """
     if action not in _RESOLVE_ACTIONS:
-        raise ValueError(
-            f"unknown escalation action {action!r}; valid: {sorted(_RESOLVE_ACTIONS)}"
-        )
+        raise ValueError(f"unknown escalation action {action!r}; valid: {sorted(_RESOLVE_ACTIONS)}")
     session = db.get_session(conn, session_id)
     if session is None:
         raise ValueError(f"unknown session_id {session_id!r}")
@@ -707,18 +682,12 @@ def _force_converge_round_1(conn: sqlite3.Connection, session: dict) -> dict:
         and r["status"] in ("in_progress", "escalated", "pending")
     ]
     if not same_host_open:
-        raise ValueError(
-            f"session {session['id']!r} has no in-progress round_1 rounds to force"
-        )
+        raise ValueError(f"session {session['id']!r} has no in-progress round_1 rounds to force")
     for rnd in same_host_open:
         outputs = _outputs_for_round(conn, rnd["id"])
         if not outputs:
-            raise ValueError(
-                f"round {rnd['id']!r} has no outputs to force-converge from"
-            )
-        db.update_round_status(
-            conn, rnd["id"], "converged", outcome_text=outputs[-1]
-        )
+            raise ValueError(f"round {rnd['id']!r} has no outputs to force-converge from")
+        db.update_round_status(conn, rnd["id"], "converged", outcome_text=outputs[-1])
     return _maybe_advance_to_round_2(conn, db.get_session(conn, session["id"]))
 
 
@@ -769,13 +738,7 @@ def _proceed_to_arbitrator(conn: sqlite3.Connection, session: dict) -> dict:
             continue
         outputs = _outputs_for_round(conn, rnd["id"])
         if not outputs:
-            raise ValueError(
-                f"round {rnd['id']!r} has no outputs to proceed from"
-            )
-        db.update_round_status(
-            conn, rnd["id"], "converged", outcome_text=outputs[-1]
-        )
+            raise ValueError(f"round {rnd['id']!r} has no outputs to proceed from")
+        db.update_round_status(conn, rnd["id"], "converged", outcome_text=outputs[-1])
     outcomes = _round_outcomes_per_host(conn, session["id"])
-    return _spawn_round_2(
-        conn, session, source_output=_format_arbitrator_input(outcomes)
-    )
+    return _spawn_round_2(conn, session, source_output=_format_arbitrator_input(outcomes))
