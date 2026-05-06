@@ -5,6 +5,8 @@ PATH:        ~/projects/agent-broker/tests/test_peer_services.py
 DESCRIPTION: Service-layer tests for peer identity lookup, audit recording, delivery, polling, acking, and boundary discipline.
 
 CHANGELOG:
+2026-05-06 16:35      Codex      [Fix] Aggregate peer boundary lint
+                                      violations across all guarded files.
 2026-05-06 16:15      Codex      [Fix] Add transcript recipient-gate coverage,
                                       segmented query-count assertions, and
                                       collect-all SQL-boundary diagnostics.
@@ -661,12 +663,13 @@ def test_poll_thread_and_transcript_batch_receipts_and_events():
             assert len(receipt_selects) <= max_receipts, (operation, receipt_selects)
             assert len(event_selects) <= max_events, (operation, event_selects)
 
+        seen.clear()
         conn.set_trace_callback(trace)
         delivery.poll(conn, PollRequest(participant=_participant("pi-codex"), limit=12))
         conn.set_trace_callback(None)
         assert_selects("poll", max_receipts=2, max_events=2)
-        seen.clear()
 
+        seen.clear()
         conn.set_trace_callback(trace)
         delivery.get_thread(
             conn,
@@ -674,8 +677,8 @@ def test_poll_thread_and_transcript_batch_receipts_and_events():
         )
         conn.set_trace_callback(None)
         assert_selects("get_thread", max_receipts=2, max_events=2)
-        seen.clear()
 
+        seen.clear()
         conn.set_trace_callback(trace)
         delivery.get_thread_transcript(
             conn,
@@ -800,17 +803,44 @@ def _assert_peer_boundary_clean(path_name: str, source: str) -> None:
     assert not violations, "\n".join(violations)
 
 
-def test_peer_boundaries_do_not_contain_sql_or_direct_execute_calls():
-    root = Path(__file__).resolve().parents[1]
-    boundary_paths = [
-        root / "src" / "agent_broker" / "peer" / "identity_service.py",
-        root / "src" / "agent_broker" / "peer" / "peer_api.py",
-        root / "src" / "agent_broker" / "peer" / "peer_delivery_service.py",
-        root / "src" / "agent_broker" / "peer" / "peer_mcp_tools.py",
-        root / "src" / "agent_broker" / "peer" / "peer_web.py",
+def _peer_boundary_paths(root: Path) -> list[Path]:
+    return [
+        root / "identity_service.py",
+        root / "peer_api.py",
+        root / "peer_delivery_service.py",
+        root / "peer_mcp_tools.py",
+        root / "peer_web.py",
     ]
+
+
+def _assert_peer_boundaries_clean(boundary_paths: list[Path]) -> None:
+    violations: list[str] = []
     for path in boundary_paths:
-        _assert_peer_boundary_clean(path.name, path.read_text())
+        violations.extend(_peer_boundary_violations(path.name, path.read_text()))
+    assert not violations, "\n".join(violations)
+
+
+def test_peer_boundaries_do_not_contain_sql_or_direct_execute_calls():
+    root = Path(__file__).resolve().parents[1] / "src" / "agent_broker" / "peer"
+    _assert_peer_boundaries_clean(_peer_boundary_paths(root))
+
+
+def test_peer_boundary_lint_reports_multiple_files(tmp_path):
+    source = """from . import peer_store
+
+def regression(conn):
+    conn.execute("SELECT * FROM peer_messages")
+    peer_store.init_peer_schema(conn)
+"""
+    first = tmp_path / "peer_mcp_tools.py"
+    second = tmp_path / "peer_api.py"
+    first.write_text(source, encoding="utf-8")
+    second.write_text(source, encoding="utf-8")
+    with pytest.raises(AssertionError) as excinfo:
+        _assert_peer_boundaries_clean([first, second])
+    message = str(excinfo.value)
+    assert "peer_mcp_tools.py" in message
+    assert "peer_api.py" in message
 
 
 def test_peer_boundary_lint_catches_store_access_regressions():
