@@ -1,0 +1,13 @@
+{
+  "_meta": {
+    "changelog": [
+      {
+        "datetime": "2026-05-06 13:38",
+        "author": "Codex",
+        "category": "[Docs]",
+        "description": "Document operator-managed permanently hidden thread config; should not grow after historical contamination is captured because future probes use is_probe identities."
+      }
+    ]
+  },
+  "thread_ids": []
+}
