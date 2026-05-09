@@ -502,12 +502,23 @@ class CollaborationService:
         recipients: tuple[ParticipantRef, ...],
     ) -> tuple[tuple[ParticipantRef, ...], CollabError | None]:
         resolved_recipients = []
+        seen_participant_ids: set[str] = set()
         for recipient in recipients:
             resolved, error = self._resolve_collaboration_participant(recipient)
             if error is not None:
                 return (), error
             if resolved is None:
                 raise RuntimeError("participant resolution returned no participant and no error")
+            if resolved.participant_id in seen_participant_ids:
+                return (
+                    (),
+                    collab_error(
+                        "forbidden_recipient",
+                        "recipient list contains duplicate participant",
+                        {"participant_id": resolved.participant_id},
+                    ),
+                )
+            seen_participant_ids.add(resolved.participant_id)
             resolved_recipients.append(resolved)
         if not resolved_recipients:
             return (), collab_error("forbidden_recipient", "recipient list is empty", None)
@@ -780,7 +791,7 @@ class CollaborationService:
                     }
                 )
         entries.extend(self._audit_event_entries(conn, entries))
-        return entries
+        return sorted(entries, key=self._thread_entry_sort_key)
 
     def _draft_has_probe_participant(self, draft: CollabDraft) -> bool:
         if draft.from_participant.is_probe:
@@ -798,8 +809,16 @@ class CollaborationService:
         for draft_row in collab_store.list_thread_drafts(conn, thread_id):
             if draft_row["from_participant"] == participant.participant_id:
                 return True
-            if participant.participant_id in self._recipient_ids(
+            draft_recipient_ids = self._recipient_ids(
                 collab_store.list_draft_recipients(conn, draft_row["draft_id"])
+            )
+            if participant.participant_id not in draft_recipient_ids:
+                continue
+            decision = collab_store.get_decision_for_draft(conn, draft_row["draft_id"])
+            if decision is None:
+                return True
+            if participant.participant_id in self._recipient_ids(
+                collab_store.list_decision_recipients(conn, decision["decision_id"])
             ):
                 return True
         for deliverable_row in collab_store.list_thread_deliverables(conn, thread_id):
@@ -850,3 +869,26 @@ class CollaborationService:
                 deliverable_ids=deliverable_ids,
             )
         ]
+
+    def _thread_entry_sort_key(self, entry: dict[str, Any]) -> tuple[str, int, str]:
+        entry_type = entry["entry_type"]
+        if entry_type == "draft":
+            return (entry["draft"]["created_ts"], 0, entry["draft"]["draft_id"])
+        if entry_type == "decision":
+            return (entry["decision"]["decision_ts"], 2, entry["decision"]["decision_id"])
+        if entry_type == "deliverable":
+            return (entry["deliverable"]["created_ts"], 4, entry["deliverable"]["deliverable_id"])
+        if entry_type == "audit_event":
+            event = entry["event"]
+            event_order = {
+                "draft_created": 1,
+                "operator_approve": 3,
+                "operator_edit_and_approve": 3,
+                "operator_redirect_and_approve": 3,
+                "operator_reject": 3,
+                "deliverable_created": 5,
+                "deliverable_polled": 6,
+                "deliverable_acked": 7,
+            }.get(event["event_kind"], 8)
+            return (event["event_ts"], event_order, event["event_id"])
+        return ("", 99, entry_type)

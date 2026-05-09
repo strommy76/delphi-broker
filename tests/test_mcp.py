@@ -334,13 +334,24 @@ def test_mcp_tools_list_exposes_collaboration_tools_to_client(tmp_path, monkeypa
         )
     assert response.status_code == 200, response.text
     payload = _sse_payload(response)
-    tools = {tool["name"] for tool in payload["result"]["tools"]}
+    tools_by_name = {tool["name"]: tool for tool in payload["result"]["tools"]}
     assert {
         "collab_propose_message",
         "collab_poll",
         "collab_ack",
         "collab_get_thread",
-    }.issubset(tools)
+    }.issubset(tools_by_name)
+    propose_description = tools_by_name["collab_propose_message"]["description"]
+    for canonical_field in (
+        "<correlation_id>",
+        "<to_participants_json>",
+        "<message_kind>",
+        "<payload_json>",
+        "<content_text>",
+        "<thread_id_or_empty>",
+        "<subject_or_empty>",
+    ):
+        assert canonical_field in propose_description
 
 
 def test_mcp_http_path_rejects_foreign_host(tmp_path, monkeypatch):

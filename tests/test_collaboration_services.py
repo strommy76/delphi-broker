@@ -265,6 +265,8 @@ def test_collaboration_approval_gates_delivery_and_ack():
         assert "deliverable_created" in event_kinds
         assert "deliverable_polled" in event_kinds
         assert "deliverable_acked" in event_kinds
+        entry_timestamps = [_thread_entry_timestamp(entry) for entry in operator_thread.entries]
+        assert entry_timestamps == sorted(entry_timestamps)
     finally:
         conn.close()
 
@@ -325,6 +327,44 @@ def test_draft_submission_is_idempotent_and_conflicts_fail_loud():
         conn.close()
 
 
+def test_duplicate_recipients_fail_loud_before_store_boundary():
+    conn = _conn()
+    try:
+        service = _service()
+        duplicate_proposal = ProposeMessageRequest(
+            from_participant=_participant("dev-codex"),
+            to_participants=(_participant("prod-codex"), _participant("prod-codex")),
+            message_kind="text",
+            payload_json={"body": "draft"},
+            content_text="draft",
+            correlation_id="corr-duplicate-proposal",
+            thread_id=None,
+            subject="coordination",
+        )
+        proposed = service.propose(conn, duplicate_proposal)
+        assert proposed.draft is None
+        assert proposed.error is not None
+        assert proposed.error.error == "forbidden_recipient"
+        assert proposed.error.detail == {"participant_id": "prod-codex"}
+
+        redirect_draft = service.propose(conn, _proposal("corr-duplicate-redirect")).draft
+        assert redirect_draft is not None
+        redirected = service.decide(
+            conn,
+            _operator_request(
+                redirect_draft.draft_id,
+                decision_type="redirect_and_approve",
+                to_participants=(_participant("flow-claude"), _participant("flow-claude")),
+            ),
+        )
+        assert redirected.deliverable is None
+        assert redirected.error is not None
+        assert redirected.error.error == "forbidden_recipient"
+        assert redirected.error.detail == {"participant_id": "flow-claude"}
+    finally:
+        conn.close()
+
+
 def test_operator_edit_redirect_and_reject_preserve_delivery_authority():
     conn = _conn()
     try:
@@ -359,6 +399,15 @@ def test_operator_edit_redirect_and_reject_preserve_delivery_authority():
         )
         redirected_ids = {item.deliverable_id for item in original_poll.deliverables}
         assert redirected.deliverable.deliverable_id not in redirected_ids
+        original_thread = service.get_thread(
+            conn,
+            CollabGetThreadRequest(
+                participant=_participant("prod-codex"),
+                thread_id=redirected_draft.thread_id,
+            ),
+        )
+        assert original_thread.error is not None
+        assert original_thread.error.error == "thread_not_found"
         new_poll = service.poll(
             conn,
             CollabPollRequest(participant=_participant("flow-claude"), limit=10),
@@ -375,8 +424,39 @@ def test_operator_edit_redirect_and_reject_preserve_delivery_authority():
         )
         assert rejected.error is None
         assert rejected.deliverable is None
+        rejected_thread = service.get_thread(
+            conn,
+            CollabGetThreadRequest(
+                participant=_participant("prod-codex"),
+                thread_id=rejected_draft.thread_id,
+            ),
+        )
+        assert rejected_thread.error is not None
+        assert rejected_thread.error.error == "thread_not_found"
     finally:
         conn.close()
+
+
+def _thread_entry_timestamp(entry: dict) -> tuple[str, int]:
+    if entry["entry_type"] == "draft":
+        return (entry["draft"]["created_ts"], 0)
+    if entry["entry_type"] == "decision":
+        return (entry["decision"]["decision_ts"], 2)
+    if entry["entry_type"] == "deliverable":
+        return (entry["deliverable"]["created_ts"], 4)
+    if entry["entry_type"] == "audit_event":
+        order = {
+            "draft_created": 1,
+            "operator_approve": 3,
+            "operator_edit_and_approve": 3,
+            "operator_redirect_and_approve": 3,
+            "operator_reject": 3,
+            "deliverable_created": 5,
+            "deliverable_polled": 6,
+            "deliverable_acked": 7,
+        }.get(entry["event"]["event_kind"], 8)
+        return (entry["event"]["event_ts"], order)
+    return ("", 99)
 
 
 def test_operator_decisions_fail_loud_on_invalid_field_combinations():

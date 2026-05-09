@@ -51,7 +51,8 @@ def register_collab_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
         description=(
             "Create a pending operator-mediated collaboration draft. Signature canonical: "
             "'collab_propose_message|<agent_id>|<participant_type>|<transport_type>|"
-            "<client_ts>|<correlation_id>'."
+            "<client_ts>|<correlation_id>|<to_participants_json>|<message_kind>|"
+            "<payload_json>|<content_text>|<thread_id_or_empty>|<subject_or_empty>'."
         ),
     )
     def collab_propose_message(

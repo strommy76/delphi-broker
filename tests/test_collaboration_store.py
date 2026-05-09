@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ast
+import re
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -163,3 +166,30 @@ def test_collab_deliverable_requires_approved_decision():
             )
     finally:
         conn.close()
+
+
+def test_collaboration_sql_mutations_are_owned_by_store_seam():
+    source_root = Path(__file__).resolve().parents[1] / "src" / "agent_broker"
+    store_path = source_root / "collaboration" / "collab_store.py"
+    mutating_collab_sql = re.compile(
+        r"\b(?:"
+        r"INSERT\s+INTO|"
+        r"UPDATE|"
+        r"DELETE\s+FROM|"
+        r"REPLACE\s+INTO|"
+        r"CREATE\s+(?:TABLE|TRIGGER|INDEX)(?:\s+IF\s+NOT\s+EXISTS)?"
+        r")\s+[`\"']?(?:IDX_)?COLLAB_"
+    )
+    offenders: list[str] = []
+    for path in source_root.rglob("*.py"):
+        if path == store_path:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            normalized = " ".join(node.value.upper().split())
+            if mutating_collab_sql.search(normalized):
+                offenders.append(f"{path.relative_to(source_root)}:{node.lineno}")
+
+    assert offenders == []
