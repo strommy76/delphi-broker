@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Collaboration Thread{% endblock %}
+{% block content %}
+<section>
+  <p><a href="/web/collab/drafts" class="muted">&larr; Collaboration drafts</a></p>
+  <h1>Collaboration Thread</h1>
+  <p class="card-meta">{{ payload.thread_id }}</p>
+  {% for entry in payload.entries %}
+    <article class="card">
+      <div class="card-header">
+        <strong>{{ entry.entry_type }}</strong>
+      </div>
+      {% if entry.entry_type == "draft" %}
+        <p class="card-meta">
+          {{ entry.draft.created_ts }} · {{ entry.draft.correlation_id }}
+        </p>
+        <div class="card-body-full">{{ entry.draft.content_text }}</div>
+      {% elif entry.entry_type == "decision" %}
+        <p class="card-meta">
+          {{ entry.decision.decision_ts }} · {{ entry.decision.decision_type }}
+        </p>
+        {% if entry.decision.final_content_text %}
+          <div class="card-body-full">{{ entry.decision.final_content_text }}</div>
+        {% endif %}
+      {% elif entry.entry_type == "deliverable" %}
+        <p class="card-meta">
+          {{ entry.deliverable.created_ts }} · {{ entry.deliverable.correlation_id }}
+        </p>
+        <div class="card-body-full">{{ entry.deliverable.content_text }}</div>
+      {% endif %}
+    </article>
+  {% endfor %}
+</section>
+{% endblock %}

@@ -183,6 +183,7 @@ for _agent in SEED_AGENTS:
     _participant_type = _agent.get("participant_type")
     _transport_type = _agent.get("transport_type")
     _is_probe = _agent.get("is_probe")
+    _collaboration_governed = _agent.get("collaboration_governed", False)
     _missing = [
         _field
         for _field, _value in (
@@ -197,9 +198,7 @@ for _agent in SEED_AGENTS:
     ]
     if _missing:
         raise ValueError(
-            f"Agent entry in {_agents_file} missing required field "
-            f"{'/'.join(_missing)}: "
-            f"{_agent!r}"
+            f"Agent entry in {_agents_file} missing required field {'/'.join(_missing)}: {_agent!r}"
         )
     if _role not in _VALID_ROLES:
         raise ValueError(
@@ -210,6 +209,11 @@ for _agent in SEED_AGENTS:
         raise ValueError(
             f"Agent '{_agent_id}' has invalid is_probe {_is_probe!r} in {_agents_file}; "
             "expected true or false"
+        )
+    if not isinstance(_collaboration_governed, bool):
+        raise ValueError(
+            f"Agent '{_agent_id}' has invalid collaboration_governed "
+            f"{_collaboration_governed!r} in {_agents_file}; expected true or false"
         )
     _secret = (_agent.get("secret") or "").strip()
     if _secret and not _secret.startswith("GENERATE_WITH"):
@@ -226,7 +230,7 @@ if _secrets_file.exists():
     _secrets_data = json.loads(_secrets_file.read_text())
     if not isinstance(_secrets_data, dict):
         raise ValueError(
-            f"{_secrets_file}: top-level must be a JSON object " "of {agent_id: hex_secret}"
+            f"{_secrets_file}: top-level must be a JSON object of {{agent_id: hex_secret}}"
         )
     for _agent_id, _secret_value in _secrets_data.items():
         if not isinstance(_secret_value, str) or not _secret_value.strip():

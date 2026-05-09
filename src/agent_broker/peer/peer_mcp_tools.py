@@ -53,6 +53,16 @@ def register_peer_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
     def _identity():
         return IDENTITY_SERVICE
 
+    def _participant(agent_id: str, participant_type: str, transport_type: str) -> ParticipantRef:
+        resolved = _identity().resolve(agent_id)
+        return ParticipantRef(
+            participant_id=agent_id,
+            participant_type=participant_type,
+            transport_type=transport_type,
+            is_probe=bool(resolved and resolved.is_probe),
+            collaboration_governed=bool(resolved and resolved.collaboration_governed),
+        )
+
     @mcp.tool(
         name="peer_send",
         description=(
@@ -94,12 +104,7 @@ def register_peer_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
             if err:
                 return err
             try:
-                sender = ParticipantRef(
-                    participant_id=agent_id,
-                    participant_type=participant_type,
-                    transport_type=transport_type,
-                    is_probe=_identity().is_probe(agent_id),
-                )
+                sender = _participant(agent_id, participant_type, transport_type)
                 recipients = None
                 if to_participants is not None:
                     identity = _identity()
@@ -163,12 +168,7 @@ def register_peer_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
                 return err
             try:
                 request = PollRequest(
-                    participant=ParticipantRef(
-                        participant_id=agent_id,
-                        participant_type=participant_type,
-                        transport_type=transport_type,
-                        is_probe=_identity().is_probe(agent_id),
-                    ),
+                    participant=_participant(agent_id, participant_type, transport_type),
                     limit=limit,
                 )
             except ValidationError:
@@ -206,12 +206,7 @@ def register_peer_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
                 return err
             try:
                 request = AckRequest(
-                    participant=ParticipantRef(
-                        participant_id=agent_id,
-                        participant_type=participant_type,
-                        transport_type=transport_type,
-                        is_probe=_identity().is_probe(agent_id),
-                    ),
+                    participant=_participant(agent_id, participant_type, transport_type),
                     message_id=message_id,
                 )
             except ValidationError:
@@ -260,12 +255,7 @@ def register_peer_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
                 return err
             try:
                 request = GetThreadRequest(
-                    participant=ParticipantRef(
-                        participant_id=agent_id,
-                        participant_type=participant_type,
-                        transport_type=transport_type,
-                        is_probe=_identity().is_probe(agent_id),
-                    ),
+                    participant=_participant(agent_id, participant_type, transport_type),
                     thread_id=thread_id,
                 )
             except ValidationError:

@@ -36,12 +36,19 @@ class IdentityService:
                 raise ValueError(
                     f"agent registry entry missing peer identity field(s) {missing}: {agent!r}"
                 )
+            collaboration_governed = agent.get("collaboration_governed", False)
+            if not isinstance(collaboration_governed, bool):
+                raise ValueError(
+                    "agent registry entry has invalid collaboration_governed "
+                    f"{collaboration_governed!r}: {agent!r}"
+                )
             participants.append(
                 ParticipantRef(
                     participant_id=agent["agent_id"],
                     participant_type=agent["participant_type"],
                     transport_type=agent["transport_type"],
                     is_probe=agent["is_probe"],
+                    collaboration_governed=collaboration_governed,
                 )
             )
         return cls(participants)

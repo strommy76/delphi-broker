@@ -926,6 +926,78 @@ def build_executor_emit_signature_fields(
     )
 
 
+def build_collab_propose_signature_fields(
+    *,
+    agent_id: str,
+    participant_type: str,
+    transport_type: str,
+    timestamp: str,
+    correlation_id: str,
+) -> tuple[str, ...]:
+    return (
+        "collab_propose_message",
+        agent_id,
+        participant_type,
+        transport_type,
+        timestamp,
+        correlation_id,
+    )
+
+
+def build_collab_poll_signature_fields(
+    *,
+    agent_id: str,
+    participant_type: str,
+    transport_type: str,
+    timestamp: str,
+    limit: int,
+) -> tuple[str, ...]:
+    return (
+        "collab_poll",
+        agent_id,
+        participant_type,
+        transport_type,
+        timestamp,
+        str(limit),
+    )
+
+
+def build_collab_ack_signature_fields(
+    *,
+    agent_id: str,
+    participant_type: str,
+    transport_type: str,
+    timestamp: str,
+    deliverable_id: str,
+) -> tuple[str, ...]:
+    return (
+        "collab_ack",
+        agent_id,
+        participant_type,
+        transport_type,
+        timestamp,
+        deliverable_id,
+    )
+
+
+def build_collab_get_thread_signature_fields(
+    *,
+    agent_id: str,
+    participant_type: str,
+    transport_type: str,
+    timestamp: str,
+    thread_id: str,
+) -> tuple[str, ...]:
+    return (
+        "collab_get_thread",
+        agent_id,
+        participant_type,
+        transport_type,
+        timestamp,
+        thread_id,
+    )
+
+
 def build_abort_signature_fields(
     *, sender: str, session_id: str, timestamp: str
 ) -> tuple[str, ...]:

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Collaboration Drafts{% endblock %}
+{% block content %}
+<section>
+  <h1>Collaboration Drafts</h1>
+  <p class="hint">Operator-mediated drafts awaiting decision.</p>
+  <p class="card-meta">
+    {% if include_probes %}
+      <a href="/web/collab/drafts">Hide probes</a>
+    {% else %}
+      <a href="/web/collab/drafts?include_probes=true">Show probes</a>
+    {% endif %}
+  </p>
+  {% if payload.drafts %}
+    {% for draft in payload.drafts %}
+      <article class="card">
+        <div class="card-header">
+          <h2>{{ draft.message_kind }} · {{ draft.correlation_id }}</h2>
+          <span class="badge badge-pending">pending</span>
+        </div>
+        <p class="card-meta">
+          From {{ draft.from_participant.participant_id }} to
+          {{ draft.to_participants | map(attribute="participant_id") | join(", ") }}
+          · {{ draft.created_ts }}
+        </p>
+        <div class="card-body-full">{{ draft.content_text }}</div>
+        <form method="post" action="/web/collab/drafts/{{ draft.draft_id }}/approve">
+          <button class="btn" type="submit">Approve</button>
+        </form>
+        <form method="post" action="/web/collab/drafts/{{ draft.draft_id }}/edit_approve">
+          <textarea name="content_text" rows="4">{{ draft.content_text }}</textarea>
+          <button class="btn" type="submit">Edit and approve</button>
+        </form>
+        <form method="post" action="/web/collab/drafts/{{ draft.draft_id }}/reject">
+          <input name="reason" placeholder="Reason">
+          <button class="btn btn-danger" type="submit">Reject</button>
+        </form>
+        <form method="post" action="/web/collab/drafts/{{ draft.draft_id }}/redirect_approve">
+          <input name="to_participants" placeholder="participant-a, participant-b">
+          <button class="btn" type="submit">Redirect and approve</button>
+        </form>
+        <p><a href="/web/collab/threads/{{ draft.thread_id }}">Thread</a></p>
+      </article>
+    {% endfor %}
+  {% else %}
+    <p class="muted">No pending collaboration drafts.</p>
+  {% endif %}
+</section>
+{% endblock %}

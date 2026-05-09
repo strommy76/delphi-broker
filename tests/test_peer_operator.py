@@ -47,30 +47,57 @@ def _delivery(api_harness) -> PeerDeliveryService:
     )
 
 
-def _seed_peer_message(api_harness, *, recipient: str = "prod-codex") -> tuple[str, str]:
+def _seed_peer_message(api_harness, *, recipient: str = "peer-fixture-target") -> tuple[str, str]:
     conn = api_harness.database.get_connection(api_harness.config.DB_PATH)
     try:
         api_harness.database.init_db(conn)
         peer_store.init_peer_schema(conn)
-        sent = _delivery(api_harness).send(
+        sent_ts = peer_store.utc_now()
+        thread_id = peer_store.new_id()
+        message_id = peer_store.new_id()
+        recipient_type = "operator" if recipient == "operator" else "agent"
+        recipient_transport = "http" if recipient == "operator" else "mcp"
+        message = peer_store.send_message(
             conn,
-            SendRequest(
-                from_participant=_participant("prod-claude"),
-                to_participants=(_participant(recipient),),
-                message_kind="text",
-                payload_json={"body": "operator transcript"},
-                content_text="operator transcript",
-                correlation_id="corr-operator-transcript",
-                parent_message_id=None,
-                thread_id=None,
-                subject="operator transcript",
-            ),
+            create_thread_args={
+                "thread_id": thread_id,
+                "subject": "operator transcript",
+                "created_ts": sent_ts,
+            },
+            message_args={
+                "message_id": message_id,
+                "thread_id": thread_id,
+                "from_participant": "peer-fixture-source",
+                "from_participant_type": "agent",
+                "from_transport_type": "mcp",
+                "kind": "text",
+                "payload_json": {"body": "operator transcript"},
+                "content_text": "operator transcript",
+                "correlation_id": "corr-operator-transcript",
+                "parent_message_id": None,
+                "sent_ts": sent_ts,
+            },
+            receipt_args=[
+                {
+                    "message_id": message_id,
+                    "recipient_participant": recipient,
+                    "recipient_type": recipient_type,
+                    "recipient_transport": recipient_transport,
+                    "recipient_order": 0,
+                }
+            ],
+            event_args={
+                "event_id": peer_store.new_id(),
+                "message_id": message_id,
+                "participant_id": "peer-fixture-source",
+                "event_kind": "message_sent",
+                "event_ts": sent_ts,
+                "detail_json": {"recipient_count": 1},
+            },
         )
     finally:
         conn.close()
-    assert sent.message is not None
-    assert sent.error is None
-    return sent.message.thread_id, sent.message.message_id
+    return message["thread_id"], message["message_id"]
 
 
 def test_peer_web_threads_requires_operator_session(api_harness):
