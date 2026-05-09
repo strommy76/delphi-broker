@@ -20,7 +20,7 @@ Use a new `collab_*` persistence namespace alongside the current `peer_*` tables
 
 Rationale:
 
-- Reusing `peer_*` directly would force immediate-delivery peer messages to become draft-first, which conflicts with the hard constraint that Pi peer-to-peer behavior must not degrade.
+- Reusing `peer_*` directly would force immediate-delivery peer messages to become draft-first, which conflicts with the hard constraint that existing peer-to-peer behavior must not degrade.
 - The existing peer store already has useful patterns: immutable messages, append-only events, receipt guards, and atomic helper structure (`src/agent_broker/peer/peer_store.py:32`, `src/agent_broker/peer/peer_store.py:39`, `src/agent_broker/peer/peer_store.py:55`, `src/agent_broker/peer/peer_store.py:67`, `src/agent_broker/peer/peer_store.py:93-117`).
 - A bounded #9/#10 broker-core slice is not required for the MVP if the new collaboration namespace is explicit, service-owned, and documented. Broader substrate consolidation remains a later decision.
 
@@ -41,15 +41,15 @@ The risk of parallel authority is controlled by scope: `peer_*` remains immediat
 
 ## `peer_send` Disposition
 
-Recommended disposition: preserve `peer_send` for direct peer-to-peer participants while blocking it for collaboration-governed participants or messages via explicit participant/message properties.
+Recommended disposition: preserve `peer_send` for direct peer-to-peer participants while blocking it for collaboration-governed participants via an explicit participant property.
 
-This is not a Pi-name branch. The implementation should add explicit collaboration governance metadata at the participant and/or message boundary. Participants/messages governed by operator-mediated collaboration must use `collab_propose_message`; direct `peer_send` delivery for that governed scope fails loud. Existing Pi peer participants remain direct-peer capable, preserving current behavior.
+This is not a deployment-name branch. The implementation should add explicit collaboration governance metadata at the participant boundary. Only governed participants may use collaboration tools. Participants governed by operator-mediated collaboration must use `collab_propose_message`; direct `peer_send` delivery for that governed scope fails loud. Existing non-governed peer participants remain direct-peer capable and are not collaboration participants. Per-message governance overrides are out of scope for the MVP.
 
-Gate B must prove:
+Implementation must prove:
 
-- Pi `peer_send` round trip still passes.
-- A collaboration-governed participant/message cannot deliver through `peer_send`.
-- The guard reads declared properties, not participant names, host names, or Pi/dev/prod/Flow literals.
+- Direct peer `peer_send` round trip still passes for non-governed participants.
+- A collaboration-governed participant cannot deliver through `peer_send`.
+- The guard reads declared properties, not participant names, host names, or deployment literals.
 
 ## Collaboration Lifecycle
 
@@ -71,6 +71,8 @@ approved / edited_and_approved / redirected_and_approved
 
 The operator decision is the authority transition. Edit, reject, and redirect preserve the original draft, the decision, the final deliverable form when applicable, and correlation across all audit events.
 
+Recipient thread visibility is approval-gated: recipients do not see pending draft bodies before approval. The sender can see its own drafts and decisions. The operator can see all draft, decision, delivery, receipt, and audit evidence.
+
 ## Service Seams
 
 - `collaboration_identity`: resolves participants and collaboration governance properties from config.
@@ -82,6 +84,8 @@ The operator decision is the authority transition. Edit, reject, and redirect pr
 - MCP and HTTP/web adapters call these seams; adapters do not own state transitions.
 
 Names are implementation suggestions, not final API commitments. The required property is one stable concept per seam.
+
+Persistence classification: collaboration drafts, decisions, deliverables, receipts, and thread grouping are canonical broker communication state. Collaboration audit events are observational evidence. Pending queues, inboxes, transcripts, and audit-detail views are derived projections and must not become independent persistence authorities.
 
 ## No-Bypass Authority Map
 
@@ -131,9 +135,9 @@ Targeted validation:
 
 - Unit tests for draft creation, approval, edit, redirect, reject, delivery, poll, ack, transcript projection, idempotency, and restart redelivery.
 - Negative tests proving unapproved delivery fails through MCP, HTTP/web, helper, service, store, and `peer_send`.
-- Regression tests proving existing Pi peer `send -> poll -> ack -> get_thread` behavior remains green.
+- Regression tests proving existing direct peer `send -> poll -> ack -> get_thread` behavior remains green.
 - Probe segregation tests: default-hidden, explicit include-visible.
-- Static/source review proving generic collaboration core does not branch on agent, host, model, provider, workflow, transport route, Pi, dev/prod/Flow, Tailscale, or IP literals.
+- Static/source review proving generic collaboration core does not branch on deployment identity categories: participant identity, host identity, model identity, provider identity, workflow form, or transport route.
 - MCP client-visible discovery proof for collaboration tools.
 - Cross-host live probe: dev proposes to prod, operator approves/edits, prod receives and acks; repeat prod to dev. If environment blocks live proof, record the blocker and obtain explicit approval for a substitute before closeout.
 
@@ -157,14 +161,14 @@ Construct and prove rejection or correct handling:
 - Duplicate retry creates duplicate delivery.
 - Ack by non-recipient succeeds.
 - Probe traffic visible in default operator view.
-- Generic logic branches on current agent/host/provider/workflow names.
+- Generic logic branches on current deployment identity values rather than declared properties.
 
 ## Stop Conditions
 
 Stop and ask before implementation continues if:
 
-- Pi peer-to-peer behavior cannot be preserved structurally.
-- `peer_send` cannot be scoped without name/host-specific branching.
+- Existing peer-to-peer behavior cannot be preserved structurally.
+- `peer_send` cannot be scoped without deployment-identity branching.
 - `DESIGN.md` reconciliation requires redefining Delphi v2 rather than adding a separate collaboration domain.
 - A no-bypass disproof requires adapter-only discipline.
 - Operator authority needs a new auth model.
@@ -178,7 +182,7 @@ Phase 1: Gate A artifact only.
 
 Phase 2 after acknowledgment: update `DESIGN.md` with the collaboration domain lifecycle and seams, plus any README/BOOTSTRAP notes needed for discoverability.
 
-Phase 3: persistence/contracts/store-layer guards and unit tests.
+Phase 3: persistence/contracts/store-layer guards and unit tests. Phase 3 must confirm `peer_*` table schemas remain unchanged, add only `collab_*` persistence for this MVP, and pin store guards for deliverables/receipts without approval evidence.
 
 Phase 4: services and no-bypass tests.
 
@@ -201,6 +205,6 @@ Phase 6: cross-host dev/prod live probe, PR evidence, and closeout.
 Approval requested for:
 
 - New `collab_*` namespace alongside current `peer_*`.
-- Property-scoped `peer_send` guard that preserves Pi peer behavior while blocking collaboration-governed bypass.
+- Participant-property-scoped `peer_send` guard that preserves existing peer behavior while blocking collaboration-governed bypass.
 - DESIGN-first implementation order before dependent code.
 - Validation plan including Pi peer regression, no-bypass disproofs, client-visible MCP proof, and dev/prod cross-host live probe.

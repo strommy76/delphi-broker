@@ -381,7 +381,203 @@ Defaults proposed by the contract (60s nudge, polling UI, 5s agent poll, 24h max
 
 ---
 
-## 17. Reviewer Notes
+## 17. Operator-Mediated Collaboration Domain
+
+Issue #11 adds a separate collaboration domain alongside the v2 Delphi
+workflow. This domain exists to replace manual operator copy/paste between
+Lexx agents while preserving an explicit operator review point before one
+agent's draft can be delivered to another agent.
+
+This section does not alter the Delphi session/round/iteration/review state
+machine. The deleted v1 approval-gated message lifecycle remains deleted. The
+collaboration domain uses new domain names and new persistence surfaces.
+
+### Authority Rule
+
+Operator approval is load-bearing server authority. No agent-authored
+collaboration draft is deliverable to a recipient participant until an
+operator decision approves, edits-and-approves, or redirects-and-approves it.
+
+The approval check is enforced in the collaboration delivery authority and by
+store-layer fail-loud guards where the invariant is representable in SQLite.
+MCP, HTTP, web, and helper adapters are projections over that authority; they
+do not own delivery decisions.
+
+### Relationship To Peer Messaging
+
+The current `peer_*` domain remains immediate peer-to-peer messaging. It is
+used by Pi participants today and must not degrade.
+
+The new collaboration domain uses a separate `collab_*` namespace. `peer_*`
+tables are not mutated for the collaboration MVP. `peer_messages`,
+`peer_receipts`, and `peer_events` keep their existing schema and trigger
+semantics.
+
+The bypass boundary is participant-level. Participant configuration marks a
+participant as governed by operator-mediated collaboration with an explicit
+property. Only collaboration-governed participants may use collaboration tools.
+A collaboration-governed participant must use the collaboration tools for
+outbound collaboration messages; direct `peer_send` delivery for that governed
+participant fails loud. Participants that are not collaboration governed keep
+direct peer behavior and are not collaboration participants. This is a
+property check, not a branch on agent names, host names, workflow names,
+transport routes, or deployment topology.
+
+Per-message governance overrides are out of scope for the MVP. They can be
+introduced later only with explicit conflict-resolution rules between
+participant policy and message policy.
+
+### Persistence Classification
+
+SQLite remains the SSOT for broker communication state.
+
+Canonical / authoritative collaboration state:
+
+- `collab_threads` or equivalent thread grouping
+- `collab_drafts`
+- `collab_operator_decisions`
+- `collab_deliverables`
+- `collab_receipts`
+
+Observational collaboration state:
+
+- `collab_events` append-only audit events
+
+Derived projections:
+
+- pending operator queue
+- participant inbox
+- thread transcript views
+- audit detail views
+
+Derived projections are query/read-model surfaces. They must not become
+independent persistence authorities.
+
+### Collaboration Lifecycle
+
+```
+draft_created
+  -> pending_operator_decision
+     -> approved
+     -> edited_and_approved
+     -> redirected_and_approved
+     -> rejected
+
+approved / edited_and_approved / redirected_and_approved
+  -> deliverable
+  -> delivered
+  -> acked
+```
+
+The operator decision preserves the original draft, the decision record, the
+final deliverable form when applicable, and correlation across all audit
+events. Rejected drafts never become deliverable.
+
+Recipient visibility is approval-gated. A recipient calling the collaboration
+thread view before approval does not see draft bodies addressed to them.
+Recipient-visible thread content begins only from approved deliverables visible
+to that recipient. The drafting participant can see its own drafts and
+decision state. The operator can see all drafts, decisions, deliverables,
+receipts, and audit events.
+
+### Idempotency
+
+Draft submission idempotency is keyed by `(from_participant, correlation_id)`.
+A retry with the same participant, same correlation id, and same canonical
+draft payload returns the existing draft id. A retry with the same participant
+and correlation id but different canonical payload fails loud as an idempotency
+conflict.
+
+Approval, delivery, and ack operations are also idempotent:
+
+- A repeated identical approval decision returns the existing decision.
+- A second delivery materialization for the same approved decision returns the
+  existing deliverable.
+- A repeated ack by the authorized recipient reports the existing ack state.
+- An ack by a non-recipient fails loud.
+
+### Store-Layer Guards
+
+The collaboration store enforces invariants below, either with SQLite
+constraints/triggers or with a store helper plus tests when a trigger cannot
+express the condition cleanly:
+
+- Draft rows are immutable after creation except for state transitions owned
+  by collaboration store helpers.
+- Operator decisions are append-only and reference an existing draft.
+- Deliverables reference an approved / edited-and-approved /
+  redirected-and-approved decision. A deliverable without approval evidence is
+  rejected.
+- Receipts reference deliverables, not drafts. A receipt cannot exist for an
+  unapproved draft.
+- Delivered and acked timestamps are write-once.
+- Audit events are append-only.
+
+Adapters and services do not write raw SQL for collaboration state outside the
+store seam.
+
+### Agent And Operator Surfaces
+
+Agent-facing MCP tools are generic collaboration primitives:
+
+- propose a message draft
+- poll approved deliverables
+- acknowledge a deliverable
+- get a visible thread transcript
+
+Each tool keeps HMAC-SHA256 authentication and the 5-minute replay window.
+Canonical signature fields are documented with the tool definitions and must
+be mirrored by any client helper. A helper signs canonical fields that the
+broker independently verifies; it does not approve, deliver, or short-circuit
+broker decisions.
+
+Operator HTTP/web surfaces cover:
+
+- pending draft queue
+- approve as-is
+- edit and approve
+- redirect and approve
+- reject
+- thread transcript
+- probe visibility toggle
+- audit event detail
+
+Operator authority remains bound to `DELPHI_OPERATOR_TOKEN`; no new auth model
+is introduced.
+
+### Delivery Model
+
+The MVP delivery model is polling. Agents poll for approved deliverables and
+ack them after receipt. Push notifications, SSE, webhooks, and streaming
+delivery are out of scope for the MVP because they introduce additional
+delivery-capable surfaces.
+
+### Probe Segregation
+
+Probe/default-hidden behavior derives from participant metadata such as
+`is_probe`. The collaboration domain must not use a hardcoded hidden-thread
+sidecar list as its visibility authority. Probe traffic is hidden from default
+operator views and visible only through an explicit include-probes request.
+
+### Required Regression Tests
+
+The implementation must add durable tests proving:
+
+- A collaboration-governed participant cannot deliver through `peer_send`.
+- Existing direct peer Pi behavior still supports `send -> poll -> ack ->
+  get_thread`.
+- Recipient thread reads do not expose pending draft bodies before approval.
+- Duplicate draft submission is idempotent by `(from_participant,
+  correlation_id)` and conflicting payload reuse fails loud.
+- Store-level or store-seam guards reject deliverable / receipt state without
+  approval evidence.
+- Generic collaboration core does not branch on deployment identity
+  categories such as participant identity, host identity, model identity,
+  provider identity, workflow form, or transport route.
+
+---
+
+## 18. Reviewer Notes
 
 This contract is intended for review by an independent agent on a different host before implementation lands. Reviewer should evaluate:
 
