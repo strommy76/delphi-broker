@@ -17,6 +17,12 @@ def sign_collab_propose_message(
     transport_type: str,
     client_ts: str,
     correlation_id: str,
+    to_participants: list[str] | tuple[str, ...],
+    message_kind: str,
+    payload_json: dict,
+    content_text: str,
+    thread_id: str | None,
+    subject: str | None,
 ) -> str:
     return db.compute_signature(
         secret,
@@ -26,6 +32,12 @@ def sign_collab_propose_message(
             transport_type=transport_type,
             timestamp=client_ts,
             correlation_id=correlation_id,
+            to_participants=to_participants,
+            message_kind=message_kind,
+            payload_json=payload_json,
+            content_text=content_text,
+            thread_id=thread_id,
+            subject=subject,
         ),
     )
 

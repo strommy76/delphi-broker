@@ -818,6 +818,13 @@ def list_events_for_refs(
     )
 
 
+def detail_from_row(row: dict[str, Any], field: str = "detail_json") -> dict[str, Any]:
+    value = _json_load(row[field])
+    if value is None:
+        raise ValueError(f"{field} is NULL")
+    return value
+
+
 def payload_from_row(row: dict[str, Any], field: str = "payload_json") -> dict[str, Any]:
     value = _json_load(row[field])
     if value is None:

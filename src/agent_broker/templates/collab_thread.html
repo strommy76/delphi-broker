@@ -27,6 +27,11 @@
           {{ entry.deliverable.created_ts }} · {{ entry.deliverable.correlation_id }}
         </p>
         <div class="card-body-full">{{ entry.deliverable.content_text }}</div>
+      {% elif entry.entry_type == "audit_event" %}
+        <p class="card-meta">
+          {{ entry.event.event_ts }} · {{ entry.event.event_kind }} · {{ entry.event.participant_id }}
+        </p>
+        <pre class="card-body-full">{{ entry.event.detail_json }}</pre>
       {% endif %}
     </article>
   {% endfor %}

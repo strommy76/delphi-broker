@@ -425,6 +425,16 @@ class CollaborationService:
                     {"thread_id": request.thread_id},
                 ),
             )
+        if not self._participant_can_read_thread(conn, request.thread_id, participant):
+            return CollabGetThreadResponse(
+                thread_id=request.thread_id,
+                entries=(),
+                error=collab_error(
+                    "thread_not_found",
+                    "thread not found or not visible",
+                    {"thread_id": request.thread_id},
+                ),
+            )
         return CollabGetThreadResponse(
             thread_id=request.thread_id,
             entries=tuple(self._thread_entries(conn, request.thread_id, participant)),
@@ -568,6 +578,16 @@ class CollaborationService:
             collab_store.list_draft_recipients(conn, draft["draft_id"])
         )
         if request.decision_type == "reject":
+            if (
+                request.final_payload_json is not None
+                or request.final_content_text is not None
+                or request.to_participants is not None
+            ):
+                return {}, collab_error(
+                    "invalid_payload",
+                    "reject cannot carry final content, final payload, or recipients",
+                    None,
+                )
             return {
                 "payload_json": None,
                 "content_text": None,
@@ -575,6 +595,12 @@ class CollaborationService:
                 "deliverable": False,
             }, None
         if request.decision_type == "edit_and_approve":
+            if request.to_participants is not None:
+                return {}, collab_error(
+                    "invalid_payload",
+                    "edit_and_approve cannot carry redirected recipients",
+                    None,
+                )
             content = (request.final_content_text or "").strip()
             if not content:
                 return {}, collab_error(
@@ -593,6 +619,12 @@ class CollaborationService:
                 "deliverable": True,
             }, None
         if request.decision_type == "redirect_and_approve":
+            if request.final_payload_json is not None or request.final_content_text is not None:
+                return {}, collab_error(
+                    "invalid_payload",
+                    "redirect_and_approve cannot carry edited final content or payload",
+                    None,
+                )
             if request.to_participants is None:
                 return {}, collab_error(
                     "invalid_payload",
@@ -608,6 +640,16 @@ class CollaborationService:
                 "recipients": recipients,
                 "deliverable": True,
             }, None
+        if (
+            request.final_payload_json is not None
+            or request.final_content_text is not None
+            or request.to_participants is not None
+        ):
+            return {}, collab_error(
+                "invalid_payload",
+                "approve cannot carry final content, final payload, or redirected recipients",
+                None,
+            )
         return {
             "payload_json": draft_payload,
             "content_text": draft["content_text"],
@@ -737,9 +779,74 @@ class CollaborationService:
                         "deliverable": deliverable.model_dump(mode="json"),
                     }
                 )
+        entries.extend(self._audit_event_entries(conn, entries))
         return entries
 
     def _draft_has_probe_participant(self, draft: CollabDraft) -> bool:
         if draft.from_participant.is_probe:
             return True
         return any(item.is_probe for item in draft.to_participants)
+
+    def _participant_can_read_thread(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        participant: ParticipantRef,
+    ) -> bool:
+        if participant.participant_id == self._operator_participant_id:
+            return True
+        for draft_row in collab_store.list_thread_drafts(conn, thread_id):
+            if draft_row["from_participant"] == participant.participant_id:
+                return True
+            if participant.participant_id in self._recipient_ids(
+                collab_store.list_draft_recipients(conn, draft_row["draft_id"])
+            ):
+                return True
+        for deliverable_row in collab_store.list_thread_deliverables(conn, thread_id):
+            if deliverable_row["from_participant"] == participant.participant_id:
+                return True
+            if participant.participant_id in self._recipient_ids(
+                collab_store.list_receipts_for_deliverable(
+                    conn,
+                    deliverable_row["deliverable_id"],
+                )
+            ):
+                return True
+        return False
+
+    def _audit_event_entries(
+        self,
+        conn: sqlite3.Connection,
+        visible_entries: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        draft_ids = []
+        decision_ids = []
+        deliverable_ids = []
+        for entry in visible_entries:
+            if entry["entry_type"] == "draft":
+                draft_ids.append(entry["draft"]["draft_id"])
+            elif entry["entry_type"] == "decision":
+                decision_ids.append(entry["decision"]["decision_id"])
+            elif entry["entry_type"] == "deliverable":
+                deliverable_ids.append(entry["deliverable"]["deliverable_id"])
+        return [
+            {
+                "entry_type": "audit_event",
+                "event": {
+                    "event_id": row["event_id"],
+                    "draft_id": row["draft_id"],
+                    "decision_id": row["decision_id"],
+                    "deliverable_id": row["deliverable_id"],
+                    "participant_id": row["participant_id"],
+                    "event_kind": row["event_kind"],
+                    "event_ts": row["event_ts"],
+                    "detail_json": collab_store.detail_from_row(row),
+                },
+            }
+            for row in collab_store.list_events_for_refs(
+                conn,
+                draft_ids=draft_ids,
+                decision_ids=decision_ids,
+                deliverable_ids=deliverable_ids,
+            )
+        ]

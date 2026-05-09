@@ -933,6 +933,12 @@ def build_collab_propose_signature_fields(
     transport_type: str,
     timestamp: str,
     correlation_id: str,
+    to_participants: list[str] | tuple[str, ...],
+    message_kind: str,
+    payload_json: dict,
+    content_text: str,
+    thread_id: str | None,
+    subject: str | None,
 ) -> tuple[str, ...]:
     return (
         "collab_propose_message",
@@ -941,6 +947,12 @@ def build_collab_propose_signature_fields(
         transport_type,
         timestamp,
         correlation_id,
+        json.dumps(list(to_participants), sort_keys=True, separators=(",", ":")),
+        message_kind,
+        json.dumps(payload_json, sort_keys=True, separators=(",", ":")),
+        content_text,
+        "" if thread_id is None else thread_id,
+        "" if subject is None else subject,
     )
 
 

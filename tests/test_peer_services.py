@@ -70,36 +70,42 @@ def _identity(extra_agents: tuple[str, ...] = ()) -> IdentityService:
             "participant_type": "agent",
             "transport_type": "mcp",
             "is_probe": False,
+            "collaboration_governed": False,
         },
         {
             "agent_id": "pi-codex",
             "participant_type": "agent",
             "transport_type": "mcp",
             "is_probe": False,
+            "collaboration_governed": False,
         },
         {
             "agent_id": "prod-codex",
             "participant_type": "agent",
             "transport_type": "mcp",
             "is_probe": False,
+            "collaboration_governed": False,
         },
         {
             "agent_id": "operator",
             "participant_type": "operator",
             "transport_type": "http",
             "is_probe": False,
+            "collaboration_governed": False,
         },
         {
             "agent_id": "pi-claude-probe",
             "participant_type": "agent",
             "transport_type": "http",
             "is_probe": True,
+            "collaboration_governed": False,
         },
         {
             "agent_id": "pi-codex-probe",
             "participant_type": "agent",
             "transport_type": "http",
             "is_probe": True,
+            "collaboration_governed": False,
         },
     ]
     agents.extend(
@@ -108,6 +114,7 @@ def _identity(extra_agents: tuple[str, ...] = ()) -> IdentityService:
             "participant_type": "agent",
             "transport_type": "mcp",
             "is_probe": False,
+            "collaboration_governed": False,
         }
         for item in extra_agents
     )

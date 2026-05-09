@@ -79,6 +79,13 @@ def _identity() -> IdentityService:
                 "is_probe": False,
                 "collaboration_governed": False,
             },
+            {
+                "agent_id": "probe-agent",
+                "participant_type": "agent",
+                "transport_type": "mcp",
+                "is_probe": True,
+                "collaboration_governed": True,
+            },
         ]
     )
 
@@ -236,6 +243,58 @@ def test_collaboration_approval_gates_delivery_and_ack():
         )
         assert second_ack.error is not None
         assert second_ack.error.error == "ack_idempotent"
+        operator_thread = service.get_thread(
+            conn,
+            CollabGetThreadRequest(
+                participant=_participant(
+                    "operator",
+                    participant_type="operator",
+                    transport_type="http",
+                    collaboration_governed=False,
+                ),
+                thread_id=proposed.draft.thread_id,
+            ),
+        )
+        assert operator_thread.error is None
+        event_kinds = [
+            entry["event"]["event_kind"]
+            for entry in operator_thread.entries
+            if entry["entry_type"] == "audit_event"
+        ]
+        assert "draft_created" in event_kinds
+        assert "deliverable_created" in event_kinds
+        assert "deliverable_polled" in event_kinds
+        assert "deliverable_acked" in event_kinds
+    finally:
+        conn.close()
+
+
+def test_collaboration_thread_denies_unrelated_participants_without_leaking():
+    conn = _conn()
+    try:
+        service = _service()
+        proposed = service.propose(conn, _proposal("corr-thread-access"))
+        assert proposed.draft is not None
+
+        unrelated = service.get_thread(
+            conn,
+            CollabGetThreadRequest(
+                participant=_participant("flow-claude"),
+                thread_id=proposed.draft.thread_id,
+            ),
+        )
+        assert unrelated.error is not None
+        assert unrelated.error.error == "thread_not_found"
+
+        recipient = service.get_thread(
+            conn,
+            CollabGetThreadRequest(
+                participant=_participant("prod-codex"),
+                thread_id=proposed.draft.thread_id,
+            ),
+        )
+        assert recipient.error is None
+        assert recipient.entries == ()
     finally:
         conn.close()
 
@@ -318,6 +377,131 @@ def test_operator_edit_redirect_and_reject_preserve_delivery_authority():
         assert rejected.deliverable is None
     finally:
         conn.close()
+
+
+def test_operator_decisions_fail_loud_on_invalid_field_combinations():
+    conn = _conn()
+    try:
+        service = _service()
+        approve_draft = service.propose(conn, _proposal("corr-invalid-approve")).draft
+        assert approve_draft is not None
+        invalid_approve = service.decide(
+            conn,
+            OperatorDecisionRequest(
+                operator_participant=_operator_request(approve_draft.draft_id).operator_participant,
+                draft_id=approve_draft.draft_id,
+                decision_type="approve",
+                final_payload_json={"body": "edited"},
+                final_content_text=None,
+                to_participants=None,
+                reason=None,
+            ),
+        )
+        assert invalid_approve.error is not None
+        assert invalid_approve.error.error == "invalid_payload"
+
+        edit_draft = service.propose(conn, _proposal("corr-invalid-edit")).draft
+        assert edit_draft is not None
+        invalid_edit = service.decide(
+            conn,
+            _operator_request(
+                edit_draft.draft_id,
+                decision_type="edit_and_approve",
+                final_content_text="edited",
+                to_participants=(_participant("flow-claude"),),
+            ),
+        )
+        assert invalid_edit.error is not None
+        assert invalid_edit.error.error == "invalid_payload"
+
+        redirect_draft = service.propose(conn, _proposal("corr-invalid-redirect")).draft
+        assert redirect_draft is not None
+        invalid_redirect = service.decide(
+            conn,
+            OperatorDecisionRequest(
+                operator_participant=_operator_request(
+                    redirect_draft.draft_id
+                ).operator_participant,
+                draft_id=redirect_draft.draft_id,
+                decision_type="redirect_and_approve",
+                final_payload_json=None,
+                final_content_text="edited",
+                to_participants=(_participant("flow-claude"),),
+                reason=None,
+            ),
+        )
+        assert invalid_redirect.error is not None
+        assert invalid_redirect.error.error == "invalid_payload"
+
+        reject_draft = service.propose(conn, _proposal("corr-invalid-reject")).draft
+        assert reject_draft is not None
+        invalid_reject = service.decide(
+            conn,
+            _operator_request(
+                reject_draft.draft_id,
+                decision_type="reject",
+                to_participants=(_participant("flow-claude"),),
+            ),
+        )
+        assert invalid_reject.error is not None
+        assert invalid_reject.error.error == "invalid_payload"
+    finally:
+        conn.close()
+
+
+def test_pending_probe_drafts_are_hidden_by_default():
+    conn = _conn()
+    try:
+        service = _service()
+        probe_proposal = ProposeMessageRequest(
+            from_participant=_participant("probe-agent", is_probe=True),
+            to_participants=(_participant("prod-codex"),),
+            message_kind="text",
+            payload_json={"body": "probe"},
+            content_text="probe",
+            correlation_id="corr-probe-hidden",
+            thread_id=None,
+            subject="probe",
+        )
+        proposed = service.propose(conn, probe_proposal)
+        assert proposed.error is None
+
+        assert service.list_pending_drafts(conn, include_probes=False)["drafts"] == []
+        visible = service.list_pending_drafts(conn, include_probes=True)["drafts"]
+        assert [draft["draft_id"] for draft in visible] == [proposed.draft.draft_id]
+    finally:
+        conn.close()
+
+
+def test_approved_unacked_deliverable_redelivers_after_restart(tmp_path):
+    db_path = tmp_path / "collab.sqlite"
+    first = sqlite3.connect(db_path)
+    first.row_factory = sqlite3.Row
+    first.execute("PRAGMA foreign_keys=ON")
+    peer_store.init_peer_schema(first)
+    collab_store.init_collab_schema(first)
+    service = _service()
+    proposed = service.propose(first, _proposal("corr-restart"))
+    assert proposed.draft is not None
+    approved = service.decide(first, _operator_request(proposed.draft.draft_id))
+    assert approved.error is None
+    first.close()
+
+    second = sqlite3.connect(db_path)
+    second.row_factory = sqlite3.Row
+    second.execute("PRAGMA foreign_keys=ON")
+    peer_store.init_peer_schema(second)
+    collab_store.init_collab_schema(second)
+    try:
+        redelivered = service.poll(
+            second,
+            CollabPollRequest(participant=_participant("prod-codex"), limit=10),
+        )
+        assert [item.deliverable_id for item in redelivered.deliverables] == [
+            approved.deliverable.deliverable_id
+        ]
+    finally:
+        second.close()
 
 
 def test_peer_send_is_blocked_for_collaboration_governed_participants_but_not_peers():

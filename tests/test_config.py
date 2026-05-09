@@ -122,3 +122,55 @@ def test_config_rejects_invalid_collaboration_governed_flag(tmp_path, monkeypatc
 
     with pytest.raises(ValueError, match="collaboration_governed"):
         importlib.import_module("agent_broker.config")
+
+
+def test_config_rejects_missing_collaboration_governed_flag(tmp_path, monkeypatch):
+    agents_path = tmp_path / "agents.json"
+    agents_path.write_text(
+        json.dumps(
+            {
+                "agents": [
+                    {
+                        "agent_id": "pi-codex",
+                        "host": "pi",
+                        "role": "worker",
+                        "participant_type": "agent",
+                        "transport_type": "mcp",
+                        "is_probe": False,
+                        "secret": "a" * 64,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    permanently_hidden_threads_path = tmp_path / "operator_permanently_hidden_threads.json"
+    permanently_hidden_threads_path.write_text(
+        json.dumps({"_meta": {"changelog": []}, "thread_ids": []}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DELPHI_AGENTS_PATH", str(agents_path))
+    monkeypatch.setenv("DELPHI_AGENT_SECRETS_PATH", str(tmp_path / "agent-secrets.json"))
+    monkeypatch.setenv(
+        "OPERATOR_PERMANENTLY_HIDDEN_THREADS_PATH", str(permanently_hidden_threads_path)
+    )
+    monkeypatch.setenv("OPERATOR_PARTICIPANT_ID", "pi-codex")
+    monkeypatch.setenv("DELPHI_DB_PATH", str(tmp_path / "broker.sqlite"))
+    monkeypatch.setenv("DELPHI_HOST", "127.0.0.1")
+    monkeypatch.setenv("DELPHI_PORT", "8420")
+    monkeypatch.setenv("DELPHI_MCP_HOST_REGISTRY", "127.0.0.1:*,localhost:*")
+    monkeypatch.setenv(
+        "DELPHI_MCP_ORIGIN_REGISTRY",
+        "http://127.0.0.1:8420,http://localhost:8420",
+    )
+    monkeypatch.setenv("DELPHI_WEB_SECURE", "false")
+    monkeypatch.setenv("DELPHI_NUDGE_SWEEP_ENABLED", "false")
+    monkeypatch.setenv("DELPHI_MCP_SESSION_MANAGER_ENABLED", "false")
+    monkeypatch.setenv("DELPHI_ARBITRATOR_AGENT_ID", "pi-claude")
+    monkeypatch.setenv("DELPHI_EXECUTOR_AGENT_ID", "pi-codex")
+    for name in sorted(sys.modules, reverse=True):
+        if name == "agent_broker" or name.startswith("agent_broker."):
+            sys.modules.pop(name, None)
+
+    with pytest.raises(ValueError, match="collaboration_governed"):
+        importlib.import_module("agent_broker.config")

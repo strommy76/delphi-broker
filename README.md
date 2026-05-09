@@ -85,7 +85,7 @@ Agent registry lives in `config/agents.json` (copy from example):
 cp config/agents.json.example config/agents.json
 ```
 
-Each agent entry declares `agent_id`, `host`, and exactly one `role` from `worker | arbitrator | executor`. Per-agent HMAC secrets can be inlined (development) or kept in `config/agents-secrets.json` (production). Participants that must use operator-mediated collaboration set `collaboration_governed: true`; direct peer sends involving those participants are rejected and must use the collaboration lifecycle.
+Each agent entry declares `agent_id`, `host`, exactly one `role` from `worker | arbitrator | executor`, and an explicit `collaboration_governed` boolean. Per-agent HMAC secrets can be inlined (development) or kept in `config/agents-secrets.json` (production). Participants that must use operator-mediated collaboration set `collaboration_governed: true`; direct peer sends involving those participants are rejected and must use the collaboration lifecycle.
 
 ## Running
 

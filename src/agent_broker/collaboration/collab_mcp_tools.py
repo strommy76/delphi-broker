@@ -81,6 +81,12 @@ def register_collab_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
                     transport_type=transport_type,
                     timestamp=client_ts,
                     correlation_id=correlation_id,
+                    to_participants=to_participants,
+                    message_kind=message_kind,
+                    payload_json=payload_json,
+                    content_text=content_text,
+                    thread_id=thread_id,
+                    subject=subject,
                 ),
             )
             if err:

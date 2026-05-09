@@ -29,14 +29,20 @@ class IdentityService:
         for agent in agents:
             missing = [
                 key
-                for key in ("agent_id", "participant_type", "transport_type", "is_probe")
+                for key in (
+                    "agent_id",
+                    "participant_type",
+                    "transport_type",
+                    "is_probe",
+                    "collaboration_governed",
+                )
                 if key not in agent or agent[key] in (None, "")
             ]
             if missing:
                 raise ValueError(
                     f"agent registry entry missing peer identity field(s) {missing}: {agent!r}"
                 )
-            collaboration_governed = agent.get("collaboration_governed", False)
+            collaboration_governed = agent["collaboration_governed"]
             if not isinstance(collaboration_governed, bool):
                 raise ValueError(
                     "agent registry entry has invalid collaboration_governed "

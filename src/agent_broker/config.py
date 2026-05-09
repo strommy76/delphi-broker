@@ -183,7 +183,7 @@ for _agent in SEED_AGENTS:
     _participant_type = _agent.get("participant_type")
     _transport_type = _agent.get("transport_type")
     _is_probe = _agent.get("is_probe")
-    _collaboration_governed = _agent.get("collaboration_governed", False)
+    _collaboration_governed = _agent.get("collaboration_governed")
     _missing = [
         _field
         for _field, _value in (
@@ -193,6 +193,7 @@ for _agent in SEED_AGENTS:
             ("participant_type", _participant_type),
             ("transport_type", _transport_type),
             ("is_probe", _is_probe),
+            ("collaboration_governed", _collaboration_governed),
         )
         if _value is None or _value == ""
     ]
