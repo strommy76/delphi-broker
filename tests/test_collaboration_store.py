@@ -71,6 +71,14 @@ def _insert_matching_deliverable(conn: sqlite3.Connection) -> None:
                'dev-codex', 'agent', 'mcp', 'text', '{"body":"draft"}', 'draft',
                'corr-1', '2026-05-09T00:00:03+00:00')"""
     )
+    conn.execute(
+        """INSERT INTO collab_events
+              (event_id, draft_id, decision_id, deliverable_id, participant_id,
+               event_kind, event_ts, detail_json)
+           VALUES
+              ('event-deliverable-1', 'draft-1', 'decision-1', 'deliverable-1',
+               'operator', 'deliverable_created', '2026-05-09T00:00:03+00:00', '{}')"""
+    )
 
 
 def test_collab_schema_adds_namespace_without_mutating_peer_tables():
@@ -361,6 +369,88 @@ def test_collab_receipts_require_decision_recipient():
                       (deliverable_id, recipient_participant, recipient_type,
                        recipient_transport, recipient_order)
                    VALUES ('deliverable-1', 'flow-claude', 'agent', 'mcp', 1)"""
+            )
+    finally:
+        conn.close()
+
+
+def test_collab_receipts_require_decision_recipient_order():
+    conn = _conn()
+    try:
+        _seed_approved_decision(conn)
+        _insert_matching_deliverable(conn)
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="collab_receipt requires decision recipient",
+        ):
+            conn.execute(
+                """INSERT INTO collab_receipts
+                      (deliverable_id, recipient_participant, recipient_type,
+                       recipient_transport, recipient_order)
+                   VALUES ('deliverable-1', 'prod-codex', 'agent', 'mcp', 1)"""
+            )
+    finally:
+        conn.close()
+
+
+def test_collab_receipts_require_deliverable_created_event():
+    conn = _conn()
+    try:
+        _seed_approved_decision(conn)
+        conn.execute(
+            """INSERT INTO collab_deliverables
+                  (deliverable_id, draft_id, decision_id, thread_id,
+                   from_participant, from_participant_type, from_transport_type,
+                   kind, payload_json, content_text, correlation_id, created_ts)
+               VALUES
+                  ('deliverable-1', 'draft-1', 'decision-1', 'thread-1',
+                   'dev-codex', 'agent', 'mcp', 'text', '{"body":"draft"}', 'draft',
+                   'corr-1', '2026-05-09T00:00:03+00:00')"""
+        )
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="collab_receipt requires decision recipient",
+        ):
+            conn.execute(
+                """INSERT INTO collab_receipts
+                      (deliverable_id, recipient_participant, recipient_type,
+                       recipient_transport, recipient_order)
+                   VALUES ('deliverable-1', 'prod-codex', 'agent', 'mcp', 0)"""
+            )
+    finally:
+        conn.close()
+
+
+def test_collab_receipt_recipient_authority_is_immutable_after_insert():
+    conn = _conn()
+    try:
+        _seed_approved_decision(conn)
+        _insert_matching_deliverable(conn)
+        conn.execute(
+            """INSERT INTO collab_receipts
+                  (deliverable_id, recipient_participant, recipient_type,
+                   recipient_transport, recipient_order)
+               VALUES ('deliverable-1', 'prod-codex', 'agent', 'mcp', 0)"""
+        )
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="collab_receipts recipient authority is immutable",
+        ):
+            conn.execute(
+                """UPDATE collab_receipts
+                      SET recipient_participant = 'flow-claude'
+                    WHERE deliverable_id = 'deliverable-1'
+                      AND recipient_participant = 'prod-codex'"""
+            )
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="collab_receipts recipient authority is immutable",
+        ):
+            conn.execute(
+                """UPDATE collab_receipts
+                      SET recipient_order = 1
+                    WHERE deliverable_id = 'deliverable-1'
+                      AND recipient_participant = 'prod-codex'"""
             )
     finally:
         conn.close()

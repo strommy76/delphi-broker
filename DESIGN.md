@@ -520,7 +520,10 @@ express the condition cleanly:
   identity must match the authorized decision/draft form. Deliverable creation
   requires the corresponding operator-decision audit event.
 - Receipts reference deliverables, not drafts. A receipt cannot exist for an
-  unapproved draft or for a participant outside the decision-recipient set.
+  unapproved draft, for a participant outside the decision-recipient set, or
+  with recipient metadata/order that differs from the approved decision
+  recipient row. A receipt cannot make a deliverable pollable until the
+  `deliverable_created` audit event exists.
 - Delivered and acked timestamps are write-once.
 - Audit events are append-only.
 

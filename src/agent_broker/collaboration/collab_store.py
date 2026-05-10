@@ -301,6 +301,14 @@ CREATE TRIGGER IF NOT EXISTS collab_receipts_state_guard
 BEFORE UPDATE ON collab_receipts
 BEGIN
     SELECT CASE
+        WHEN NEW.deliverable_id IS NOT OLD.deliverable_id
+          OR NEW.recipient_participant IS NOT OLD.recipient_participant
+          OR NEW.recipient_type IS NOT OLD.recipient_type
+          OR NEW.recipient_transport IS NOT OLD.recipient_transport
+          OR NEW.recipient_order IS NOT OLD.recipient_order
+        THEN RAISE(ABORT, 'collab_receipts recipient authority is immutable')
+    END;
+    SELECT CASE
         WHEN OLD.delivered_ts IS NOT NULL AND NEW.delivered_ts IS NOT OLD.delivered_ts
         THEN RAISE(ABORT, 'collab_receipts delivered_ts is immutable once set')
     END;
@@ -326,6 +334,12 @@ BEGIN
                AND recipient.recipient_participant = NEW.recipient_participant
                AND recipient.recipient_type = NEW.recipient_type
                AND recipient.recipient_transport = NEW.recipient_transport
+               AND recipient.recipient_order = NEW.recipient_order
+              JOIN collab_events e
+                ON e.deliverable_id = deliverable.deliverable_id
+               AND e.decision_id = deliverable.decision_id
+               AND e.draft_id = deliverable.draft_id
+               AND e.event_kind = 'deliverable_created'
              WHERE deliverable.deliverable_id = NEW.deliverable_id
         )
         THEN RAISE(ABORT, 'collab_receipt requires decision recipient')
@@ -705,10 +719,10 @@ def record_decision(
         _insert_event_no_commit(conn, **decision_event_args)
         if deliverable_args is not None:
             _insert_deliverable_no_commit(conn, **deliverable_args)
-            for receipt in receipt_args:
-                _insert_receipt_no_commit(conn, **receipt)
             if deliverable_event_args is not None:
                 _insert_event_no_commit(conn, **deliverable_event_args)
+            for receipt in receipt_args:
+                _insert_receipt_no_commit(conn, **receipt)
     except Exception:
         conn.rollback()
         raise
