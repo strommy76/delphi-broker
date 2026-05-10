@@ -19,6 +19,7 @@ CollabErrorCode = Literal[
     "draft_not_found",
     "forbidden_participant",
     "forbidden_recipient",
+    "forbidden_thread",
     "idempotency_conflict",
     "invalid_payload",
     "thread_not_found",

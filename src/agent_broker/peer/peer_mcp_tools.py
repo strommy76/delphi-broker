@@ -61,6 +61,7 @@ def register_peer_tools(mcp, _verify, _conn, AGENT_SECRETS) -> None:
             transport_type=transport_type,
             is_probe=bool(resolved and resolved.is_probe),
             collaboration_governed=bool(resolved and resolved.collaboration_governed),
+            is_decision_authority=bool(resolved and resolved.is_decision_authority),
         )
 
     @mcp.tool(

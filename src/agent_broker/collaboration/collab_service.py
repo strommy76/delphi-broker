@@ -95,6 +95,7 @@ class CollaborationService:
         thread_id, create_thread_args, thread_error = self._thread_context(
             conn,
             request,
+            sender,
             created_ts,
         )
         if thread_error is not None:
@@ -151,10 +152,7 @@ class CollaborationService:
             return OperatorDecisionResponse(decision=None, deliverable=None, error=operator_error)
         if operator is None:
             raise RuntimeError("participant resolution returned no participant and no error")
-        if (
-            operator.participant_id != self._operator_participant_id
-            or operator.participant_type != "operator"
-        ):
+        if not self._is_decision_authority(operator):
             return OperatorDecisionResponse(
                 decision=None,
                 deliverable=None,
@@ -528,6 +526,7 @@ class CollaborationService:
         self,
         conn: sqlite3.Connection,
         request: ProposeMessageRequest,
+        sender: ParticipantRef,
         created_ts: str,
     ) -> tuple[str | None, dict[str, Any] | None, CollabError | None]:
         if request.thread_id is None:
@@ -559,6 +558,19 @@ class CollaborationService:
                     "thread_not_found",
                     f"unknown thread_id {request.thread_id!r}",
                     {"thread_id": request.thread_id},
+                ),
+            )
+        if not self._participant_can_propose_to_thread(conn, thread_id, sender):
+            return (
+                None,
+                None,
+                collab_error(
+                    "forbidden_thread",
+                    "participant is not a member of the target thread",
+                    {
+                        "thread_id": thread_id,
+                        "participant_id": sender.participant_id,
+                    },
                 ),
             )
         return thread_id, None, None
@@ -761,7 +773,7 @@ class CollaborationService:
         participant: ParticipantRef,
     ) -> list[dict[str, Any]]:
         entries: list[dict[str, Any]] = []
-        is_operator = participant.participant_id == self._operator_participant_id
+        is_operator = self._is_decision_authority(participant)
         for draft_row in collab_store.list_thread_drafts(conn, thread_id):
             draft = self._draft_from_row(conn, draft_row)
             if is_operator or draft.from_participant.participant_id == participant.participant_id:
@@ -804,7 +816,7 @@ class CollaborationService:
         thread_id: str,
         participant: ParticipantRef,
     ) -> bool:
-        if participant.participant_id == self._operator_participant_id:
+        if self._is_decision_authority(participant):
             return True
         for draft_row in collab_store.list_thread_drafts(conn, thread_id):
             if draft_row["from_participant"] == participant.participant_id:
@@ -832,6 +844,57 @@ class CollaborationService:
             ):
                 return True
         return False
+
+    def _participant_can_propose_to_thread(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        participant: ParticipantRef,
+    ) -> bool:
+        if self._is_decision_authority(participant):
+            return True
+        if self._participant_has_thread_draft(conn, thread_id, participant.participant_id):
+            return True
+        return self._participant_has_thread_deliverable_access(
+            conn,
+            thread_id,
+            participant.participant_id,
+        )
+
+    def _participant_has_thread_draft(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        participant_id: str,
+    ) -> bool:
+        return any(
+            draft_row["from_participant"] == participant_id
+            for draft_row in collab_store.list_thread_drafts(conn, thread_id)
+        )
+
+    def _participant_has_thread_deliverable_access(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: str,
+        participant_id: str,
+    ) -> bool:
+        for deliverable_row in collab_store.list_thread_deliverables(conn, thread_id):
+            if deliverable_row["from_participant"] == participant_id:
+                return True
+            if participant_id in self._recipient_ids(
+                collab_store.list_receipts_for_deliverable(
+                    conn,
+                    deliverable_row["deliverable_id"],
+                )
+            ):
+                return True
+        return False
+
+    def _is_decision_authority(self, participant: ParticipantRef) -> bool:
+        return (
+            participant.participant_id == self._operator_participant_id
+            and participant.is_decision_authority
+        )
 
     def _audit_event_entries(
         self,

@@ -413,6 +413,10 @@ tables are not mutated for the collaboration MVP. `peer_messages`,
 `peer_receipts`, and `peer_events` keep their existing schema and trigger
 semantics.
 
+The `collaboration_governed` participant property scopes only to the
+`collab_*` collaboration substrate. Delphi v2/v3 workflows retain their
+existing orchestrator-role authorization model unchanged.
+
 The bypass boundary is participant-level. Participant configuration marks a
 participant as governed by operator-mediated collaboration with an explicit
 property. Only collaboration-governed participants may use collaboration tools.
@@ -435,7 +439,9 @@ Canonical / authoritative collaboration state:
 
 - `collab_threads` or equivalent thread grouping
 - `collab_drafts`
+- `collab_draft_recipients`
 - `collab_operator_decisions`
+- `collab_decision_recipients`
 - `collab_deliverables`
 - `collab_receipts`
 
@@ -504,12 +510,15 @@ express the condition cleanly:
 
 - Draft rows are immutable after creation except for state transitions owned
   by collaboration store helpers.
+- Draft recipient rows and decision recipient rows are immutable after
+  creation.
 - Operator decisions are append-only and reference an existing draft.
 - Deliverables reference an approved / edited-and-approved /
   redirected-and-approved decision. A deliverable without approval evidence is
-  rejected.
+  rejected. Deliverable sender, content, payload, correlation, and thread
+  identity must match the authorized decision/draft form.
 - Receipts reference deliverables, not drafts. A receipt cannot exist for an
-  unapproved draft.
+  unapproved draft or for a participant outside the decision-recipient set.
 - Delivered and acked timestamps are write-once.
 - Audit events are append-only.
 

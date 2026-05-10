@@ -24,6 +24,7 @@ def _participant(
     transport_type: str = "mcp",
     is_probe: bool = False,
     collaboration_governed: bool = True,
+    is_decision_authority: bool = False,
 ) -> ParticipantRef:
     return ParticipantRef(
         participant_id=participant_id,
@@ -31,10 +32,12 @@ def _participant(
         transport_type=transport_type,
         is_probe=is_probe,
         collaboration_governed=collaboration_governed,
+        is_decision_authority=is_decision_authority,
     )
 
 
-def _identity() -> IdentityService:
+def _identity(*, decision_authority: bool = True) -> IdentityService:
+    decision_authority_ids = ("operator",) if decision_authority else ()
     return IdentityService.from_agent_registry(
         [
             {
@@ -86,7 +89,8 @@ def _identity() -> IdentityService:
                 "is_probe": True,
                 "collaboration_governed": True,
             },
-        ]
+        ],
+        decision_authority_participant_ids=decision_authority_ids,
     )
 
 
@@ -128,7 +132,8 @@ def _property_identity() -> IdentityService:
                 "is_probe": False,
                 "collaboration_governed": False,
             },
-        ]
+        ],
+        decision_authority_participant_ids=("operator",),
     )
 
 
@@ -171,6 +176,7 @@ def _operator_request(
             participant_type="operator",
             transport_type="http",
             collaboration_governed=False,
+            is_decision_authority=True,
         ),
         draft_id=draft_id,
         decision_type=decision_type,
@@ -251,6 +257,7 @@ def test_collaboration_approval_gates_delivery_and_ack():
                     participant_type="operator",
                     transport_type="http",
                     collaboration_governed=False,
+                    is_decision_authority=True,
                 ),
                 thread_id=proposed.draft.thread_id,
             ),
@@ -301,6 +308,52 @@ def test_collaboration_thread_denies_unrelated_participants_without_leaking():
         conn.close()
 
 
+def test_collaboration_propose_to_existing_thread_requires_membership():
+    conn = _conn()
+    try:
+        service = _service()
+        proposed = service.propose(conn, _proposal("corr-thread-member"))
+        assert proposed.draft is not None
+
+        injected = service.propose(
+            conn,
+            ProposeMessageRequest(
+                from_participant=_participant("flow-claude"),
+                to_participants=(_participant("prod-codex"),),
+                message_kind="text",
+                payload_json={"body": "foreign"},
+                content_text="foreign",
+                correlation_id="corr-thread-injection",
+                thread_id=proposed.draft.thread_id,
+                subject=None,
+            ),
+        )
+        assert injected.draft is None
+        assert injected.error is not None
+        assert injected.error.error == "forbidden_thread"
+
+        approved = service.decide(conn, _operator_request(proposed.draft.draft_id))
+        assert approved.error is None
+        assert approved.deliverable is not None
+        reply = service.propose(
+            conn,
+            ProposeMessageRequest(
+                from_participant=_participant("prod-codex"),
+                to_participants=(_participant("dev-codex"),),
+                message_kind="text",
+                payload_json={"body": "reply"},
+                content_text="reply",
+                correlation_id="corr-thread-reply",
+                thread_id=proposed.draft.thread_id,
+                subject=None,
+            ),
+        )
+        assert reply.error is None
+        assert reply.draft is not None
+    finally:
+        conn.close()
+
+
 def test_draft_submission_is_idempotent_and_conflicts_fail_loud():
     conn = _conn()
     try:
@@ -323,6 +376,25 @@ def test_draft_submission_is_idempotent_and_conflicts_fail_loud():
         conflict = service.propose(conn, changed)
         assert conflict.error is not None
         assert conflict.error.error == "idempotency_conflict"
+    finally:
+        conn.close()
+
+
+def test_operator_decision_authority_comes_from_registry_property():
+    conn = _conn()
+    try:
+        service = CollaborationService(
+            identity_service=_identity(decision_authority=False),
+            operator_participant_id="operator",
+        )
+        proposed = service.propose(conn, _proposal("corr-operator-authority"))
+        assert proposed.draft is not None
+
+        decision = service.decide(conn, _operator_request(proposed.draft.draft_id))
+        assert decision.decision is None
+        assert decision.deliverable is None
+        assert decision.error is not None
+        assert decision.error.error == "forbidden_participant"
     finally:
         conn.close()
 

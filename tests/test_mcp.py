@@ -745,6 +745,23 @@ def test_mcp_collaboration_round_trip_requires_operator_approval_and_recipient_a
         proposed = _mcp_tool_payload(proposed_response)
         assert proposed["error"] is None
         draft_id = proposed["draft"]["draft_id"]
+        thread_id = proposed["draft"]["thread_id"]
+
+        operator_thread_response = client.get(
+            f"/api/v1/collab/threads/{thread_id}",
+            headers={
+                "Origin": "http://127.0.0.1:8420",
+                "X-Operator-Token": "test-operator-token",
+            },
+        )
+        assert operator_thread_response.status_code == 200, operator_thread_response.text
+        operator_thread = operator_thread_response.json()
+        assert operator_thread["thread_id"] == thread_id
+        assert [
+            entry["draft"]["draft_id"]
+            for entry in operator_thread["entries"]
+            if entry["entry_type"] == "draft"
+        ] == [draft_id]
 
         pre_poll_ts = _now()
         pre_poll_sig = database.compute_signature(

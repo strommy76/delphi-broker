@@ -220,9 +220,11 @@ def test_peer_operator_default_excludes_probe_threads_and_query_can_include(
 
 
 def test_peer_adapters_share_service_singletons(api_harness):
+    from agent_broker.collaboration import services as collab_services
     from agent_broker.peer import peer_api, peer_mcp_tools, peer_web, services
 
     assert peer_api.DELIVERY_SERVICE is services.DELIVERY_SERVICE
     assert peer_web.DELIVERY_SERVICE is services.DELIVERY_SERVICE
     assert peer_mcp_tools.DELIVERY_SERVICE is services.DELIVERY_SERVICE
     assert peer_mcp_tools.IDENTITY_SERVICE is services.IDENTITY_SERVICE
+    assert collab_services.IDENTITY_SERVICE is services.IDENTITY_SERVICE

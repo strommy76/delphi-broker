@@ -1,5 +1,13 @@
 """
 SQLite persistence for operator-mediated collaboration.
+
+Persistence classification:
+- Canonical: collab_threads, collab_drafts, collab_draft_recipients,
+  collab_operator_decisions, collab_decision_recipients,
+  collab_deliverables, collab_receipts.
+- Observational: collab_events append-only audit.
+- Derived: pending queues, inboxes, transcripts, and audit-detail views are
+  query projections over canonical/observational rows and have no table SSOT.
 """
 
 from __future__ import annotations
@@ -48,6 +56,8 @@ CREATE TABLE IF NOT EXISTS collab_operator_decisions (
     decision_id            TEXT PRIMARY KEY,
     draft_id               TEXT NOT NULL UNIQUE,
     operator_participant   TEXT NOT NULL,
+    -- Keep the decision type set aligned with the deliverable approval guard
+    -- below and with the DecisionType contract.
     decision_type          TEXT NOT NULL CHECK(
         decision_type IN (
             'approve',
@@ -144,6 +154,18 @@ BEGIN
     SELECT RAISE(ABORT, 'collab_drafts are immutable');
 END;
 
+CREATE TRIGGER IF NOT EXISTS collab_draft_recipients_no_update
+BEFORE UPDATE ON collab_draft_recipients
+BEGIN
+    SELECT RAISE(ABORT, 'collab_draft_recipients are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS collab_draft_recipients_no_delete
+BEFORE DELETE ON collab_draft_recipients
+BEGIN
+    SELECT RAISE(ABORT, 'collab_draft_recipients are immutable');
+END;
+
 CREATE TRIGGER IF NOT EXISTS collab_operator_decisions_no_update
 BEFORE UPDATE ON collab_operator_decisions
 BEGIN
@@ -156,6 +178,20 @@ BEGIN
     SELECT RAISE(ABORT, 'collab_operator_decisions are append-only');
 END;
 
+CREATE TRIGGER IF NOT EXISTS collab_decision_recipients_no_update
+BEFORE UPDATE ON collab_decision_recipients
+BEGIN
+    SELECT RAISE(ABORT, 'collab_decision_recipients are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS collab_decision_recipients_no_delete
+BEFORE DELETE ON collab_decision_recipients
+BEGIN
+    SELECT RAISE(ABORT, 'collab_decision_recipients are immutable');
+END;
+
+-- Keep the approved decision set aligned with the collab_operator_decisions
+-- CHECK constraint and the DecisionType contract.
 CREATE TRIGGER IF NOT EXISTS collab_deliverables_require_approval
 BEFORE INSERT ON collab_deliverables
 BEGIN
@@ -172,6 +208,24 @@ BEGIN
                )
         )
         THEN RAISE(ABORT, 'collab_deliverable requires approved decision')
+    END;
+    SELECT CASE
+        WHEN NOT EXISTS (
+            SELECT 1
+              FROM collab_operator_decisions d
+              JOIN collab_drafts draft ON draft.draft_id = d.draft_id
+             WHERE d.decision_id = NEW.decision_id
+               AND d.draft_id = NEW.draft_id
+               AND draft.thread_id = NEW.thread_id
+               AND draft.from_participant = NEW.from_participant
+               AND draft.from_participant_type = NEW.from_participant_type
+               AND draft.from_transport_type = NEW.from_transport_type
+               AND draft.kind = NEW.kind
+               AND draft.correlation_id = NEW.correlation_id
+               AND d.final_payload_json = NEW.payload_json
+               AND d.final_content_text = NEW.content_text
+        )
+        THEN RAISE(ABORT, 'collab_deliverable must match approved decision')
     END;
 END;
 
@@ -213,6 +267,24 @@ BEGIN
     SELECT CASE
         WHEN NEW.acked_ts IS NOT NULL AND NEW.delivered_ts IS NULL
         THEN RAISE(ABORT, 'collab_receipts ack requires delivered')
+    END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS collab_receipts_require_decision_recipient
+BEFORE INSERT ON collab_receipts
+BEGIN
+    SELECT CASE
+        WHEN NOT EXISTS (
+            SELECT 1
+              FROM collab_deliverables deliverable
+              JOIN collab_decision_recipients recipient
+                ON recipient.decision_id = deliverable.decision_id
+               AND recipient.recipient_participant = NEW.recipient_participant
+               AND recipient.recipient_type = NEW.recipient_type
+               AND recipient.recipient_transport = NEW.recipient_transport
+             WHERE deliverable.deliverable_id = NEW.deliverable_id
+        )
+        THEN RAISE(ABORT, 'collab_receipt requires decision recipient')
     END;
 END;
 """

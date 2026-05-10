@@ -20,6 +20,47 @@ def _conn() -> sqlite3.Connection:
     return conn
 
 
+def _seed_approved_decision(conn: sqlite3.Connection) -> None:
+    conn.executescript("""
+        INSERT INTO collab_threads VALUES
+            ('thread-1', '2026-05-09T00:00:00+00:00', 'coordination', 'open');
+        INSERT INTO collab_drafts
+            (draft_id, thread_id, from_participant, from_participant_type,
+             from_transport_type, kind, payload_json, content_text,
+             correlation_id, created_ts)
+        VALUES
+            ('draft-1', 'thread-1', 'dev-codex', 'agent', 'mcp', 'text',
+             '{"body":"draft"}', 'draft', 'corr-1', '2026-05-09T00:00:01+00:00');
+        INSERT INTO collab_draft_recipients
+            (draft_id, recipient_participant, recipient_type,
+             recipient_transport, recipient_order)
+        VALUES ('draft-1', 'prod-codex', 'agent', 'mcp', 0);
+        INSERT INTO collab_operator_decisions
+            (decision_id, draft_id, operator_participant, decision_type,
+             final_payload_json, final_content_text, reason, decision_ts)
+        VALUES
+            ('decision-1', 'draft-1', 'operator', 'approve',
+             '{"body":"draft"}', 'draft', NULL, '2026-05-09T00:00:02+00:00');
+        INSERT INTO collab_decision_recipients
+            (decision_id, recipient_participant, recipient_type,
+             recipient_transport, recipient_order)
+        VALUES ('decision-1', 'prod-codex', 'agent', 'mcp', 0);
+    """)
+
+
+def _insert_matching_deliverable(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """INSERT INTO collab_deliverables
+              (deliverable_id, draft_id, decision_id, thread_id,
+               from_participant, from_participant_type, from_transport_type,
+               kind, payload_json, content_text, correlation_id, created_ts)
+           VALUES
+              ('deliverable-1', 'draft-1', 'decision-1', 'thread-1',
+               'dev-codex', 'agent', 'mcp', 'text', '{"body":"draft"}', 'draft',
+               'corr-1', '2026-05-09T00:00:03+00:00')"""
+    )
+
+
 def test_collab_schema_adds_namespace_without_mutating_peer_tables():
     conn = _conn()
     try:
@@ -129,6 +170,42 @@ def test_collab_events_are_append_only_and_drafts_are_immutable():
         conn.close()
 
 
+def test_collab_recipient_junctions_are_immutable():
+    conn = _conn()
+    try:
+        _seed_approved_decision(conn)
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="collab_draft_recipients are immutable",
+        ):
+            conn.execute(
+                """UPDATE collab_draft_recipients
+                      SET recipient_order = 1
+                    WHERE draft_id = 'draft-1'"""
+            )
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="collab_draft_recipients are immutable",
+        ):
+            conn.execute("DELETE FROM collab_draft_recipients WHERE draft_id = 'draft-1'")
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="collab_decision_recipients are immutable",
+        ):
+            conn.execute(
+                """UPDATE collab_decision_recipients
+                      SET recipient_order = 1
+                    WHERE decision_id = 'decision-1'"""
+            )
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="collab_decision_recipients are immutable",
+        ):
+            conn.execute("DELETE FROM collab_decision_recipients WHERE decision_id = 'decision-1'")
+    finally:
+        conn.close()
+
+
 def test_collab_deliverable_requires_approved_decision():
     conn = _conn()
     try:
@@ -163,6 +240,48 @@ def test_collab_deliverable_requires_approved_decision():
                       ('deliverable-1', 'draft-1', 'decision-1', 'thread-1',
                        'dev-codex', 'agent', 'mcp', 'text', '{}', 'draft',
                        'corr-1', '2026-05-09T00:00:03+00:00')"""
+            )
+    finally:
+        conn.close()
+
+
+def test_collab_deliverable_must_match_approved_decision():
+    conn = _conn()
+    try:
+        _seed_approved_decision(conn)
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="collab_deliverable must match approved decision",
+        ):
+            conn.execute(
+                """INSERT INTO collab_deliverables
+                      (deliverable_id, draft_id, decision_id, thread_id,
+                       from_participant, from_participant_type, from_transport_type,
+                       kind, payload_json, content_text, correlation_id, created_ts)
+                   VALUES
+                      ('deliverable-1', 'draft-1', 'decision-1', 'thread-1',
+                       'dev-codex', 'agent', 'mcp', 'text',
+                       '{"body":"tampered"}', 'tampered', 'corr-1',
+                       '2026-05-09T00:00:03+00:00')"""
+            )
+    finally:
+        conn.close()
+
+
+def test_collab_receipts_require_decision_recipient():
+    conn = _conn()
+    try:
+        _seed_approved_decision(conn)
+        _insert_matching_deliverable(conn)
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="collab_receipt requires decision recipient",
+        ):
+            conn.execute(
+                """INSERT INTO collab_receipts
+                      (deliverable_id, recipient_participant, recipient_type,
+                       recipient_transport, recipient_order)
+                   VALUES ('deliverable-1', 'flow-claude', 'agent', 'mcp', 1)"""
             )
     finally:
         conn.close()

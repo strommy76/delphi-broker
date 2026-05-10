@@ -44,6 +44,7 @@ class ParticipantRef(StrictContract):
     transport_type: str
     is_probe: bool = False
     collaboration_governed: bool = False
+    is_decision_authority: bool = Field(default=False, exclude=True)
 
     @field_validator("participant_id", "participant_type", "transport_type")
     @classmethod
