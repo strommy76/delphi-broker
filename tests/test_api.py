@@ -136,6 +136,55 @@ def test_template_brand_and_task_dispatch_titles_are_split():
     assert "Sessions — Delphi" in (templates / "sessions_list.html").read_text(encoding="utf-8")
 
 
+def test_authenticated_operator_can_open_collaboration_drafts_page(api_harness, operator_token):
+    with TestClient(api_harness.app) as browser:
+        browser.headers.update(api_harness.client.headers)
+        browser.cookies.set("op_token", operator_token)
+        response = browser.get("/web/collab/drafts")
+
+    assert response.status_code == 200, response.text
+    assert "Collaboration Drafts" in response.text
+    assert "No pending collaboration drafts." in response.text
+
+
+def test_authenticated_operator_can_open_collaboration_thread_page(api_harness, operator_token):
+    from agent_broker.collaboration.collab_contracts import ProposeMessageRequest
+    from agent_broker.collaboration.services import COLLABORATION_SERVICE, IDENTITY_SERVICE
+
+    with TestClient(api_harness.app) as browser:
+        browser.headers.update(api_harness.client.headers)
+        browser.cookies.set("op_token", operator_token)
+        sender = IDENTITY_SERVICE.resolve("dev-codex")
+        recipient = IDENTITY_SERVICE.resolve("prod-codex")
+        assert sender is not None
+        assert recipient is not None
+        conn = api_harness.database.get_connection(api_harness.config.DB_PATH)
+        try:
+            proposed = COLLABORATION_SERVICE.propose(
+                conn,
+                ProposeMessageRequest(
+                    from_participant=sender,
+                    to_participants=(recipient,),
+                    message_kind="text",
+                    payload_json={"body": "operator thread render"},
+                    content_text="operator thread render",
+                    correlation_id="corr-web-thread-render",
+                    thread_id=None,
+                    subject="operator web regression",
+                ),
+            )
+        finally:
+            conn.close()
+        assert proposed.error is None
+        assert proposed.draft is not None
+
+        response = browser.get(f"/web/collab/threads/{proposed.draft.thread_id}")
+
+    assert response.status_code == 200, response.text
+    assert "Collaboration Thread" in response.text
+    assert "corr-web-thread-render" in response.text
+
+
 def test_v3_operator_rosters_exclude_probe_and_operator_identities(
     api_harness,
     operator_token,

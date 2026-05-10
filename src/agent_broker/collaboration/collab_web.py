@@ -52,9 +52,9 @@ def drafts_list(
     finally:
         conn.close()
     return templates.TemplateResponse(
+        request=request,
         name="collab_drafts.html",
         context={
-            "request": request,
             "payload": payload,
             "include_probes": include_probes,
         },
@@ -171,8 +171,9 @@ def thread_view(
     if payload.error is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=payload.error.reason)
     return templates.TemplateResponse(
+        request=request,
         name="collab_thread.html",
-        context={"request": request, "payload": payload.model_dump(mode="json")},
+        context={"payload": payload.model_dump(mode="json")},
     )
 
 
