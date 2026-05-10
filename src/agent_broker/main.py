@@ -39,6 +39,7 @@ from .config import (
     MCP_ORIGIN_REGISTRY,
     MCP_SESSION_MANAGER_ENABLED,
     NUDGE_SWEEP_ENABLED,
+    ORIGINLESS_TRUSTED_INGRESS_CIDRS,
     PORT,
 )
 from .collaboration import collab_store
@@ -116,6 +117,7 @@ async def lifespan(application: FastAPI):
 app = FastAPI(title="Agent Broker", version="0.2.0", lifespan=lifespan)
 _transport_policy = TransportPolicy(
     origin_registry=MCP_ORIGIN_REGISTRY,
+    originless_trusted_ingress_cidrs=ORIGINLESS_TRUSTED_INGRESS_CIDRS,
 )
 
 

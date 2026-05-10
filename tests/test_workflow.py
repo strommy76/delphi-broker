@@ -145,6 +145,7 @@ def wf_layer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple]
         "DELPHI_MCP_ORIGIN_REGISTRY",
         "http://127.0.0.1:8420,http://localhost:8420",
     )
+    monkeypatch.setenv("DELPHI_ORIGINLESS_TRUSTED_INGRESS_CIDRS", "")
     monkeypatch.setenv("DELPHI_WEB_SECURE", "false")
     monkeypatch.setenv("DELPHI_NUDGE_SWEEP_ENABLED", "false")
     monkeypatch.setenv("DELPHI_MCP_SESSION_MANAGER_ENABLED", "false")

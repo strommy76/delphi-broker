@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import ipaddress
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -83,10 +84,34 @@ def _require_csv_env(name: str) -> tuple[str, ...]:
     return values
 
 
+def _require_present_env(name: str) -> str:
+    value = os.environ.get(name)
+    if value is None:
+        raise RuntimeError(f"{name} is required")
+    return value.strip()
+
+
+def _require_cidr_csv_env(
+    name: str,
+) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    raw_value = _require_present_env(name)
+    values = tuple(part.strip() for part in raw_value.split(",") if part.strip())
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for value in values:
+        try:
+            networks.append(ipaddress.ip_network(value, strict=True))
+        except ValueError as exc:
+            raise RuntimeError(f"{name} contains invalid CIDR {value!r}") from exc
+    return tuple(networks)
+
+
 HOST: str = _require_env("DELPHI_HOST")
 PORT: int = _require_int_env("DELPHI_PORT")
 MCP_HOST_REGISTRY: tuple[str, ...] = _require_csv_env("DELPHI_MCP_HOST_REGISTRY")
 MCP_ORIGIN_REGISTRY: tuple[str, ...] = _require_csv_env("DELPHI_MCP_ORIGIN_REGISTRY")
+ORIGINLESS_TRUSTED_INGRESS_CIDRS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
+    _require_cidr_csv_env("DELPHI_ORIGINLESS_TRUSTED_INGRESS_CIDRS")
+)
 
 _db_path_raw = _require_env("DELPHI_DB_PATH")
 DB_PATH: Path = (

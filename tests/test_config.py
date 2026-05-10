@@ -58,6 +58,7 @@ def test_config_rejects_agent_missing_participant_identity(tmp_path, monkeypatch
         "DELPHI_MCP_ORIGIN_REGISTRY",
         "http://127.0.0.1:8420,http://localhost:8420",
     )
+    monkeypatch.setenv("DELPHI_ORIGINLESS_TRUSTED_INGRESS_CIDRS", "")
     monkeypatch.setenv("DELPHI_WEB_SECURE", "false")
     monkeypatch.setenv("DELPHI_NUDGE_SWEEP_ENABLED", "false")
     monkeypatch.setenv("DELPHI_MCP_SESSION_MANAGER_ENABLED", "false")
@@ -111,6 +112,7 @@ def test_config_rejects_invalid_collaboration_governed_flag(tmp_path, monkeypatc
         "DELPHI_MCP_ORIGIN_REGISTRY",
         "http://127.0.0.1:8420,http://localhost:8420",
     )
+    monkeypatch.setenv("DELPHI_ORIGINLESS_TRUSTED_INGRESS_CIDRS", "")
     monkeypatch.setenv("DELPHI_WEB_SECURE", "false")
     monkeypatch.setenv("DELPHI_NUDGE_SWEEP_ENABLED", "false")
     monkeypatch.setenv("DELPHI_MCP_SESSION_MANAGER_ENABLED", "false")
@@ -163,6 +165,7 @@ def test_config_rejects_missing_collaboration_governed_flag(tmp_path, monkeypatc
         "DELPHI_MCP_ORIGIN_REGISTRY",
         "http://127.0.0.1:8420,http://localhost:8420",
     )
+    monkeypatch.setenv("DELPHI_ORIGINLESS_TRUSTED_INGRESS_CIDRS", "")
     monkeypatch.setenv("DELPHI_WEB_SECURE", "false")
     monkeypatch.setenv("DELPHI_NUDGE_SWEEP_ENABLED", "false")
     monkeypatch.setenv("DELPHI_MCP_SESSION_MANAGER_ENABLED", "false")

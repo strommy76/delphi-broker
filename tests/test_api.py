@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 # ---------------------------------------------------------------------------
 # 1. Create session: valid token -> 201 with session_id
@@ -64,6 +65,31 @@ def test_foreign_origin_rejected_by_app_middleware(client):
     )
     assert resp.status_code == 403
     assert resp.json()["error"] == "origin_rejected"
+
+
+def test_operator_web_allows_missing_origin_from_configured_trusted_ingress(api_harness):
+    with TestClient(api_harness.app, client=("100.80.8.34", 53000)) as mesh_client:
+        resp = mesh_client.get(
+            "/web/",
+            headers={"X-Operator-Token": "test-operator-token"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert "Agent Broker" in resp.text
+
+
+def test_operator_web_rejects_missing_origin_from_untrusted_ingress(api_harness):
+    with TestClient(api_harness.app, client=("192.0.2.44", 53000)) as mesh_client:
+        resp = mesh_client.get(
+            "/web/",
+            headers={"X-Operator-Token": "test-operator-token"},
+        )
+
+    assert resp.status_code == 403
+    assert resp.json() == {
+        "error": "origin_rejected",
+        "reason": "missing Origin is allowed only on loopback or configured trusted ingress",
+    }
 
 
 def test_phase_3_config_registers_pi_codex():
