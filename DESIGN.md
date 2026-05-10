@@ -511,12 +511,14 @@ express the condition cleanly:
 - Draft rows are immutable after creation except for state transitions owned
   by collaboration store helpers.
 - Draft recipient rows and decision recipient rows are immutable after
-  creation.
+  creation. Their recipient sets close after the corresponding draft-created
+  or operator-decision audit event.
 - Operator decisions are append-only and reference an existing draft.
 - Deliverables reference an approved / edited-and-approved /
   redirected-and-approved decision. A deliverable without approval evidence is
   rejected. Deliverable sender, content, payload, correlation, and thread
-  identity must match the authorized decision/draft form.
+  identity must match the authorized decision/draft form. Deliverable creation
+  requires the corresponding operator-decision audit event.
 - Receipts reference deliverables, not drafts. A receipt cannot exist for an
   unapproved draft or for a participant outside the decision-recipient set.
 - Delivered and acked timestamps are write-once.

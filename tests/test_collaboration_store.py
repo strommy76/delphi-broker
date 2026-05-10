@@ -45,6 +45,18 @@ def _seed_approved_decision(conn: sqlite3.Connection) -> None:
             (decision_id, recipient_participant, recipient_type,
              recipient_transport, recipient_order)
         VALUES ('decision-1', 'prod-codex', 'agent', 'mcp', 0);
+        INSERT INTO collab_events
+            (event_id, draft_id, decision_id, deliverable_id, participant_id,
+             event_kind, event_ts, detail_json)
+        VALUES
+            ('event-draft-1', 'draft-1', NULL, NULL, 'dev-codex',
+             'draft_created', '2026-05-09T00:00:01+00:00', '{}');
+        INSERT INTO collab_events
+            (event_id, draft_id, decision_id, deliverable_id, participant_id,
+             event_kind, event_ts, detail_json)
+        VALUES
+            ('event-decision-1', 'draft-1', 'decision-1', NULL, 'operator',
+             'operator_approve', '2026-05-09T00:00:02+00:00', '{}');
     """)
 
 
@@ -206,6 +218,34 @@ def test_collab_recipient_junctions_are_immutable():
         conn.close()
 
 
+def test_collab_recipient_junctions_close_after_authority_events():
+    conn = _conn()
+    try:
+        _seed_approved_decision(conn)
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="collab_draft_recipients closed after draft creation",
+        ):
+            conn.execute(
+                """INSERT INTO collab_draft_recipients
+                      (draft_id, recipient_participant, recipient_type,
+                       recipient_transport, recipient_order)
+                   VALUES ('draft-1', 'flow-claude', 'agent', 'mcp', 1)"""
+            )
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="collab_decision_recipients closed after operator decision",
+        ):
+            conn.execute(
+                """INSERT INTO collab_decision_recipients
+                      (decision_id, recipient_participant, recipient_type,
+                       recipient_transport, recipient_order)
+                   VALUES ('decision-1', 'flow-claude', 'agent', 'mcp', 1)"""
+            )
+    finally:
+        conn.close()
+
+
 def test_collab_deliverable_requires_approved_decision():
     conn = _conn()
     try:
@@ -240,6 +280,45 @@ def test_collab_deliverable_requires_approved_decision():
                       ('deliverable-1', 'draft-1', 'decision-1', 'thread-1',
                        'dev-codex', 'agent', 'mcp', 'text', '{}', 'draft',
                        'corr-1', '2026-05-09T00:00:03+00:00')"""
+            )
+    finally:
+        conn.close()
+
+
+def test_collab_deliverable_requires_operator_decision_event():
+    conn = _conn()
+    try:
+        conn.executescript("""
+            INSERT INTO collab_threads VALUES
+                ('thread-1', '2026-05-09T00:00:00+00:00', 'coordination', 'open');
+            INSERT INTO collab_drafts
+                (draft_id, thread_id, from_participant, from_participant_type,
+                 from_transport_type, kind, payload_json, content_text,
+                 correlation_id, created_ts)
+            VALUES
+                ('draft-1', 'thread-1', 'dev-codex', 'agent', 'mcp', 'text',
+                 '{"body":"draft"}', 'draft', 'corr-1', '2026-05-09T00:00:01+00:00');
+            INSERT INTO collab_operator_decisions
+                (decision_id, draft_id, operator_participant, decision_type,
+                 final_payload_json, final_content_text, reason, decision_ts)
+            VALUES
+                ('decision-1', 'draft-1', 'operator', 'approve',
+                 '{"body":"draft"}', 'draft', NULL, '2026-05-09T00:00:02+00:00');
+        """)
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="collab_deliverable requires operator decision event",
+        ):
+            conn.execute(
+                """INSERT INTO collab_deliverables
+                      (deliverable_id, draft_id, decision_id, thread_id,
+                       from_participant, from_participant_type, from_transport_type,
+                       kind, payload_json, content_text, correlation_id, created_ts)
+                   VALUES
+                      ('deliverable-1', 'draft-1', 'decision-1', 'thread-1',
+                       'dev-codex', 'agent', 'mcp', 'text',
+                       '{"body":"draft"}', 'draft', 'corr-1',
+                       '2026-05-09T00:00:03+00:00')"""
             )
     finally:
         conn.close()

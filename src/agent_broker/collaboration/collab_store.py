@@ -166,6 +166,20 @@ BEGIN
     SELECT RAISE(ABORT, 'collab_draft_recipients are immutable');
 END;
 
+CREATE TRIGGER IF NOT EXISTS collab_draft_recipients_closed_after_draft_created
+BEFORE INSERT ON collab_draft_recipients
+BEGIN
+    SELECT CASE
+        WHEN EXISTS (
+            SELECT 1
+              FROM collab_events e
+             WHERE e.draft_id = NEW.draft_id
+               AND e.event_kind = 'draft_created'
+        )
+        THEN RAISE(ABORT, 'collab_draft_recipients closed after draft creation')
+    END;
+END;
+
 CREATE TRIGGER IF NOT EXISTS collab_operator_decisions_no_update
 BEFORE UPDATE ON collab_operator_decisions
 BEGIN
@@ -190,6 +204,23 @@ BEGIN
     SELECT RAISE(ABORT, 'collab_decision_recipients are immutable');
 END;
 
+CREATE TRIGGER IF NOT EXISTS collab_decision_recipients_closed_after_operator_decision
+BEFORE INSERT ON collab_decision_recipients
+BEGIN
+    SELECT CASE
+        WHEN EXISTS (
+            SELECT 1
+              FROM collab_operator_decisions d
+              JOIN collab_events e
+                ON e.decision_id = d.decision_id
+               AND e.draft_id = d.draft_id
+               AND e.event_kind = 'operator_' || d.decision_type
+             WHERE d.decision_id = NEW.decision_id
+        )
+        THEN RAISE(ABORT, 'collab_decision_recipients closed after operator decision')
+    END;
+END;
+
 -- Keep the approved decision set aligned with the collab_operator_decisions
 -- CHECK constraint and the DecisionType contract.
 CREATE TRIGGER IF NOT EXISTS collab_deliverables_require_approval
@@ -208,6 +239,19 @@ BEGIN
                )
         )
         THEN RAISE(ABORT, 'collab_deliverable requires approved decision')
+    END;
+    SELECT CASE
+        WHEN NOT EXISTS (
+            SELECT 1
+              FROM collab_operator_decisions d
+              JOIN collab_events e
+                ON e.decision_id = d.decision_id
+               AND e.draft_id = d.draft_id
+               AND e.event_kind = 'operator_' || d.decision_type
+             WHERE d.decision_id = NEW.decision_id
+               AND d.draft_id = NEW.draft_id
+        )
+        THEN RAISE(ABORT, 'collab_deliverable requires operator decision event')
     END;
     SELECT CASE
         WHEN NOT EXISTS (
