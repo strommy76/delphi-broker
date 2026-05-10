@@ -68,19 +68,19 @@ def test_foreign_origin_rejected_by_app_middleware(client):
 
 def test_phase_3_config_registers_pi_codex():
     root = Path(__file__).resolve().parents[1]
-    agents = json.loads((root / "config" / "agents.json").read_text())["agents"]
+    agents = json.loads((root / "config" / "agents.json").read_text(encoding="utf-8"))["agents"]
     pi_codex = [agent for agent in agents if agent["agent_id"] == "pi-codex"]
-    assert pi_codex == [
-        {
-            "agent_id": "pi-codex",
-            "host": "pi",
-            "role": "worker",
-            "participant_type": "agent",
-            "transport_type": "mcp",
-            "is_probe": False,
-        }
-    ]
-    assert "config/agents-secrets.json" in (root / ".gitignore").read_text()
+    assert len(pi_codex) == 1
+    assert {
+        "agent_id": "pi-codex",
+        "host": "pi",
+        "role": "worker",
+        "participant_type": "agent",
+        "transport_type": "mcp",
+        "is_probe": False,
+        "collaboration_governed": False,
+    }.items() <= pi_codex[0].items()
+    assert "config/agents-secrets.json" in (root / ".gitignore").read_text(encoding="utf-8")
 
 
 def test_operator_hidden_threads_config_is_gitignored_with_example():
@@ -97,11 +97,17 @@ def test_operator_hidden_threads_config_is_gitignored_with_example():
 
 def test_template_brand_and_task_dispatch_titles_are_split():
     templates = Path(__file__).resolve().parents[1] / "src" / "agent_broker" / "templates"
-    assert '<span class="nav-brand">Agent Broker</span>' in (templates / "base.html").read_text()
-    assert "Tasks — Task Dispatch" in (templates / "v3_tasks_list.html").read_text()
-    assert "New task — Task Dispatch" in (templates / "v3_task_new.html").read_text()
-    assert "{{ task.title }} — Task Dispatch" in (templates / "v3_task_view.html").read_text()
-    assert "Sessions — Delphi" in (templates / "sessions_list.html").read_text()
+    assert '<span class="nav-brand">Agent Broker</span>' in (templates / "base.html").read_text(
+        encoding="utf-8"
+    )
+    assert "Tasks — Task Dispatch" in (templates / "v3_tasks_list.html").read_text(encoding="utf-8")
+    assert "New task — Task Dispatch" in (templates / "v3_task_new.html").read_text(
+        encoding="utf-8"
+    )
+    assert "{{ task.title }} — Task Dispatch" in (templates / "v3_task_view.html").read_text(
+        encoding="utf-8"
+    )
+    assert "Sessions — Delphi" in (templates / "sessions_list.html").read_text(encoding="utf-8")
 
 
 def test_v3_operator_rosters_exclude_probe_and_operator_identities(

@@ -203,7 +203,7 @@ def post_nudge(session_id: str, payload: NudgeRequest) -> NudgeResponse:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
-                    f"iteration is in status {iteration['status']!r}, " "expected 'awaiting_nudge'"
+                    f"iteration is in status {iteration['status']!r}, expected 'awaiting_nudge'"
                 ),
             )
         if payload.action == NudgeAction.SUBMIT:
