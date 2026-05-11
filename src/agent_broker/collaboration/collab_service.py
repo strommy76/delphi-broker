@@ -23,6 +23,8 @@ from .collab_contracts import (
     CollabPollResponse,
     OperatorDecisionRequest,
     OperatorDecisionResponse,
+    OperatorMessageRequest,
+    OperatorMessageResponse,
     ProposeMessageRequest,
     ProposeMessageResponse,
     collab_error,
@@ -278,6 +280,204 @@ class CollaborationService:
             ),
         )
         return OperatorDecisionResponse(
+            decision=self._decision_from_row(decision),
+            deliverable=self._deliverable_from_row(conn, deliverable),
+            error=None,
+        )
+
+    def send_operator_message(
+        self,
+        conn: sqlite3.Connection,
+        request: OperatorMessageRequest,
+    ) -> OperatorMessageResponse:
+        operator, operator_error = self._resolve(request.operator_participant)
+        if operator_error is not None:
+            return OperatorMessageResponse(
+                draft=None, decision=None, deliverable=None, error=operator_error
+            )
+        if operator is None:
+            raise RuntimeError("participant resolution returned no participant and no error")
+        if not self._is_decision_authority(operator):
+            return OperatorMessageResponse(
+                draft=None,
+                decision=None,
+                deliverable=None,
+                error=collab_error(
+                    "forbidden_participant",
+                    "operator message must come from configured operator participant",
+                    {"participant_id": operator.participant_id},
+                ),
+            )
+
+        recipients, recipient_error = self._resolve_recipients(request.to_participants)
+        if recipient_error is not None:
+            return OperatorMessageResponse(
+                draft=None, decision=None, deliverable=None, error=recipient_error
+            )
+
+        existing = collab_store.get_draft_by_idempotency(
+            conn,
+            from_participant=operator.participant_id,
+            correlation_id=request.correlation_id,
+        )
+        if existing is not None:
+            if not self._operator_message_matches_request(conn, existing, request, recipients):
+                return OperatorMessageResponse(
+                    draft=None,
+                    decision=None,
+                    deliverable=None,
+                    error=collab_error(
+                        "idempotency_conflict",
+                        "correlation_id already used for different operator message payload",
+                        {
+                            "participant_id": operator.participant_id,
+                            "correlation_id": request.correlation_id,
+                        },
+                    ),
+                )
+            decision = collab_store.get_decision_for_draft(conn, existing["draft_id"])
+            deliverable = None
+            if decision is not None and decision["decision_type"] == "operator_initiated":
+                deliverable = collab_store.get_deliverable_for_decision(
+                    conn, decision["decision_id"]
+                )
+            if decision is None or deliverable is None:
+                return OperatorMessageResponse(
+                    draft=None,
+                    decision=None,
+                    deliverable=None,
+                    error=collab_error(
+                        "idempotency_conflict",
+                        "operator message idempotency state is incomplete",
+                        {
+                            "participant_id": operator.participant_id,
+                            "correlation_id": request.correlation_id,
+                        },
+                    ),
+                )
+            return OperatorMessageResponse(
+                draft=self._draft_from_row(conn, existing),
+                decision=self._decision_from_row(decision),
+                deliverable=self._deliverable_from_row(conn, deliverable),
+                error=None,
+            )
+
+        created_ts = collab_store.utc_now()
+        thread_id, create_thread_args, thread_error = self._operator_thread_context(
+            conn, request, created_ts
+        )
+        if thread_error is not None:
+            return OperatorMessageResponse(
+                draft=None, decision=None, deliverable=None, error=thread_error
+            )
+        if thread_id is None:
+            raise RuntimeError("thread resolution returned no thread and no error")
+
+        draft_id = collab_store.new_id()
+        decision_id = collab_store.new_id()
+        deliverable_id = collab_store.new_id()
+        draft, decision, deliverable = collab_store.record_operator_message(
+            conn,
+            create_thread_args=create_thread_args,
+            draft_args={
+                "draft_id": draft_id,
+                "thread_id": thread_id,
+                "from_participant": operator.participant_id,
+                "from_participant_type": operator.participant_type,
+                "from_transport_type": operator.transport_type,
+                "kind": request.message_kind,
+                "payload_json": request.payload_json,
+                "content_text": request.content_text,
+                "correlation_id": request.correlation_id,
+                "created_ts": created_ts,
+            },
+            draft_recipient_args=[
+                {
+                    "draft_id": draft_id,
+                    "recipient_participant": recipient.participant_id,
+                    "recipient_type": recipient.participant_type,
+                    "recipient_transport": recipient.transport_type,
+                    "recipient_order": index,
+                }
+                for index, recipient in enumerate(recipients)
+            ],
+            decision_args={
+                "decision_id": decision_id,
+                "draft_id": draft_id,
+                "operator_participant": operator.participant_id,
+                "decision_type": "operator_initiated",
+                "final_payload_json": request.payload_json,
+                "final_content_text": request.content_text,
+                "reason": None,
+                "decision_ts": created_ts,
+            },
+            decision_recipient_args=[
+                {
+                    "decision_id": decision_id,
+                    "recipient_participant": recipient.participant_id,
+                    "recipient_type": recipient.participant_type,
+                    "recipient_transport": recipient.transport_type,
+                    "recipient_order": index,
+                }
+                for index, recipient in enumerate(recipients)
+            ],
+            deliverable_args={
+                "deliverable_id": deliverable_id,
+                "draft_id": draft_id,
+                "decision_id": decision_id,
+                "thread_id": thread_id,
+                "from_participant": operator.participant_id,
+                "from_participant_type": operator.participant_type,
+                "from_transport_type": operator.transport_type,
+                "kind": request.message_kind,
+                "payload_json": request.payload_json,
+                "content_text": request.content_text,
+                "correlation_id": request.correlation_id,
+                "created_ts": created_ts,
+            },
+            receipt_args=[
+                {
+                    "deliverable_id": deliverable_id,
+                    "recipient_participant": recipient.participant_id,
+                    "recipient_type": recipient.participant_type,
+                    "recipient_transport": recipient.transport_type,
+                    "recipient_order": index,
+                }
+                for index, recipient in enumerate(recipients)
+            ],
+            draft_event_args={
+                "event_id": collab_store.new_id(),
+                "draft_id": draft_id,
+                "decision_id": None,
+                "deliverable_id": None,
+                "participant_id": operator.participant_id,
+                "event_kind": "operator_composed",
+                "event_ts": created_ts,
+                "detail_json": {"recipient_count": len(recipients)},
+            },
+            decision_event_args={
+                "event_id": collab_store.new_id(),
+                "draft_id": draft_id,
+                "decision_id": decision_id,
+                "deliverable_id": None,
+                "participant_id": operator.participant_id,
+                "event_kind": "operator_initiated_message",
+                "event_ts": created_ts,
+                "detail_json": {"recipient_count": len(recipients)},
+            },
+            deliverable_event_args={
+                "event_id": collab_store.new_id(),
+                "draft_id": draft_id,
+                "decision_id": decision_id,
+                "deliverable_id": deliverable_id,
+                "participant_id": operator.participant_id,
+                "event_kind": "deliverable_created",
+                "event_ts": created_ts,
+                "detail_json": {"recipient_count": len(recipients)},
+            },
+        )
+        return OperatorMessageResponse(
+            draft=self._draft_from_row(conn, draft),
             decision=self._decision_from_row(decision),
             deliverable=self._deliverable_from_row(conn, deliverable),
             error=None,
@@ -575,6 +775,45 @@ class CollaborationService:
             )
         return thread_id, None, None
 
+    def _operator_thread_context(
+        self,
+        conn: sqlite3.Connection,
+        request: OperatorMessageRequest,
+        created_ts: str,
+    ) -> tuple[str | None, dict[str, Any] | None, CollabError | None]:
+        if request.thread_id is None:
+            subject = (request.subject or "").strip()
+            if not subject:
+                return (
+                    None,
+                    None,
+                    collab_error(
+                        "invalid_payload",
+                        "subject is required when creating a new thread",
+                        None,
+                    ),
+                )
+            thread_id = collab_store.new_id()
+            return (
+                thread_id,
+                {"thread_id": thread_id, "subject": subject, "created_ts": created_ts},
+                None,
+            )
+        thread_id = request.thread_id.strip()
+        if not thread_id:
+            return None, None, collab_error("invalid_payload", "thread_id must not be blank", None)
+        if collab_store.get_thread(conn, thread_id) is None:
+            return (
+                None,
+                None,
+                collab_error(
+                    "thread_not_found",
+                    f"unknown thread_id {request.thread_id!r}",
+                    {"thread_id": request.thread_id},
+                ),
+            )
+        return thread_id, None, None
+
     def _draft_matches_request(
         self,
         conn: sqlite3.Connection,
@@ -584,6 +823,30 @@ class CollaborationService:
     ) -> bool:
         return (
             draft["kind"] == request.message_kind
+            and collab_store.payload_from_row(draft) == request.payload_json
+            and draft["content_text"] == request.content_text
+            and self._recipient_ids(collab_store.list_draft_recipients(conn, draft["draft_id"]))
+            == tuple(item.participant_id for item in recipients)
+        )
+
+    def _operator_message_matches_request(
+        self,
+        conn: sqlite3.Connection,
+        draft: dict[str, Any],
+        request: OperatorMessageRequest,
+        recipients: tuple[ParticipantRef, ...],
+    ) -> bool:
+        thread = collab_store.get_thread(conn, draft["thread_id"])
+        if thread is None:
+            return False
+        expected_thread_matches = (
+            draft["thread_id"] == request.thread_id
+            if request.thread_id is not None
+            else thread["subject"] == (request.subject or "").strip()
+        )
+        return (
+            expected_thread_matches
+            and draft["kind"] == request.message_kind
             and collab_store.payload_from_row(draft) == request.payload_json
             and draft["content_text"] == request.content_text
             and self._recipient_ids(collab_store.list_draft_recipients(conn, draft["draft_id"]))
@@ -600,6 +863,12 @@ class CollaborationService:
         draft_recipients = self._participants_from_rows(
             collab_store.list_draft_recipients(conn, draft["draft_id"])
         )
+        if request.decision_type == "operator_initiated":
+            return {}, collab_error(
+                "invalid_payload",
+                "operator_initiated decisions must use the operator message seam",
+                None,
+            )
         if request.decision_type == "reject":
             if (
                 request.final_payload_json is not None

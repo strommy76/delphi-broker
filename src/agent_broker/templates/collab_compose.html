@@ -1,0 +1,62 @@
+{% extends "collab_base.html" %}
+{% block title %}Compose Collaboration Message{% endblock %}
+{% block content %}
+<section>
+  <p><a href="/web/collab/drafts" class="muted">&larr; Collaboration drafts</a></p>
+  <h1>Compose Collaboration Message</h1>
+  <p class="hint">Operator-authored messages are immediately authorized and delivered through collaboration polling.</p>
+  {% if error %}
+    <div class="card card-urgent">{{ error }}</div>
+  {% endif %}
+  <form method="post" action="/web/collab/compose" class="card">
+    <label class="card-meta">Recipients</label>
+    <div class="checkbox-list">
+      {% for participant in participants %}
+        <label>
+          <input
+            type="checkbox"
+            name="to_participants"
+            value="{{ participant.participant_id }}"
+            {% if participant.participant_id in form.get("to_participants", []) %}checked{% endif %}
+          >
+          {{ participant.participant_id }}
+        </label>
+      {% endfor %}
+    </div>
+
+    <label class="card-meta" for="message_kind">Message kind</label>
+    <input id="message_kind" name="message_kind" value="{{ form.get('message_kind', 'text') }}" required>
+
+    <label class="card-meta" for="correlation_id">Correlation ID</label>
+    <input id="correlation_id" name="correlation_id" value="{{ form.get('correlation_id', '') }}" required>
+
+    <label class="card-meta" for="subject">Subject</label>
+    <input id="subject" name="subject" value="{{ form.get('subject', '') }}">
+
+    <label class="card-meta" for="thread_id">Existing thread ID (optional)</label>
+    <input id="thread_id" name="thread_id" value="{{ form.get('thread_id', '') }}">
+
+    <label class="card-meta" for="payload_json">Payload JSON</label>
+    <textarea id="payload_json" name="payload_json" rows="5" required>{{ form.get('payload_json', '{}') }}</textarea>
+
+    <label class="card-meta" for="content_text">Content</label>
+    <textarea
+      id="content_text"
+      name="content_text"
+      rows="14"
+      required
+      data-collab-preview-source
+    >{{ form.get('content_text', '') }}</textarea>
+
+    <h2>Preview</h2>
+    <div class="card-body-full collab-content" data-collab-preview>
+      <div class="collab-rendered" data-collab-output hidden></div>
+      <pre class="collab-render-fallback" data-collab-fallback>{{ form.get('content_text', '') }}</pre>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-approve" type="submit">Send via Collaboration</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

@@ -1,4 +1,5 @@
-{% extends "base.html" %}
+{% extends "collab_base.html" %}
+{% from "collab_content.html" import render_content %}
 {% block title %}Collaboration Drafts{% endblock %}
 {% block content %}
 <section>
@@ -23,7 +24,7 @@
           {{ draft.to_participants | map(attribute="participant_id") | join(", ") }}
           · {{ draft.created_ts }}
         </p>
-        <div class="card-body-full">{{ draft.content_text }}</div>
+        {{ render_content(draft.content_text) }}
         <form method="post" action="/web/collab/drafts/{{ draft.draft_id }}/approve">
           <button class="btn" type="submit">Approve</button>
         </form>

@@ -27,7 +27,13 @@ CollabErrorCode = Literal[
     "unknown_participant",
 ]
 
-DecisionType = Literal["approve", "edit_and_approve", "redirect_and_approve", "reject"]
+DecisionType = Literal[
+    "approve",
+    "edit_and_approve",
+    "redirect_and_approve",
+    "reject",
+    "operator_initiated",
+]
 
 
 class StrictContract(BaseModel):
@@ -130,6 +136,29 @@ class OperatorDecisionRequest(StrictContract):
 
 
 class OperatorDecisionResponse(StrictContract):
+    decision: CollabDecision | None = Field(...)
+    deliverable: CollabDeliverable | None = Field(...)
+    error: CollabError | None = Field(...)
+
+
+class OperatorMessageRequest(StrictContract):
+    operator_participant: ParticipantRef
+    to_participants: tuple[ParticipantRef, ...]
+    message_kind: str
+    payload_json: dict[str, Any]
+    content_text: str
+    correlation_id: str
+    thread_id: str | None = Field(...)
+    subject: str | None = Field(...)
+
+    @field_validator("message_kind", "content_text", "correlation_id")
+    @classmethod
+    def _text_not_blank(cls, value: str) -> str:
+        return _require_text(value)
+
+
+class OperatorMessageResponse(StrictContract):
+    draft: CollabDraft | None = Field(...)
     decision: CollabDecision | None = Field(...)
     deliverable: CollabDeliverable | None = Field(...)
     error: CollabError | None = Field(...)

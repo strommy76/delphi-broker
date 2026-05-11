@@ -185,6 +185,149 @@ def test_authenticated_operator_can_open_collaboration_thread_page(api_harness, 
     assert "corr-web-thread-render" in response.text
 
 
+def test_operator_message_api_uses_operator_token_not_agent_hmac(api_harness, operator_token):
+    body = {
+        "to_participants": ["prod-codex"],
+        "message_kind": "text",
+        "payload_json": {"body": "operator api"},
+        "content_text": "operator api",
+        "correlation_id": "corr-operator-api",
+        "subject": "operator api",
+    }
+    with TestClient(api_harness.app) as browser:
+        browser.headers.update({"Origin": "http://127.0.0.1:8420"})
+        unauthenticated = browser.post(
+            "/api/v1/collab/operator-message",
+            headers={"X-Agent-Id": "dev-codex", "X-Signature": "not-operator-auth"},
+            json=body,
+        )
+        assert unauthenticated.status_code == 401, unauthenticated.text
+
+        authenticated = browser.post(
+            "/api/v1/collab/operator-message",
+            headers={"X-Operator-Token": operator_token},
+            json=body,
+        )
+
+    assert authenticated.status_code == 200, authenticated.text
+    payload = authenticated.json()
+    assert payload["error"] is None
+    assert payload["draft"]["from_participant"]["participant_id"] == "operator"
+    assert payload["decision"]["decision_type"] == "operator_initiated"
+    assert payload["deliverable"]["content_text"] == "operator api"
+
+
+def test_operator_message_api_rejects_unknown_recipient(api_harness, operator_token):
+    with TestClient(api_harness.app) as browser:
+        browser.headers.update({"Origin": "http://127.0.0.1:8420"})
+        response = browser.post(
+            "/api/v1/collab/operator-message",
+            headers={"X-Operator-Token": operator_token},
+            json={
+                "to_participants": ["missing-agent"],
+                "message_kind": "text",
+                "payload_json": {"body": "operator api"},
+                "content_text": "operator api",
+                "correlation_id": "corr-operator-missing",
+                "subject": "operator api",
+            },
+        )
+
+    assert response.status_code == 400, response.text
+    assert "unknown participant" in response.text
+
+
+def test_authenticated_operator_can_open_collaboration_compose_page(api_harness, operator_token):
+    with TestClient(api_harness.app) as browser:
+        browser.headers.update(api_harness.client.headers)
+        browser.cookies.set("op_token", operator_token)
+        response = browser.get("/web/collab/compose")
+
+    assert response.status_code == 200, response.text
+    assert "Compose Collaboration Message" in response.text
+    assert "prod-codex" in response.text
+    assert "data-collab-preview-source" in response.text
+
+
+def test_authenticated_operator_can_submit_collaboration_compose_form(api_harness, operator_token):
+    with TestClient(api_harness.app) as browser:
+        browser.headers.update(api_harness.client.headers)
+        browser.cookies.set("op_token", operator_token)
+        response = browser.post(
+            "/web/collab/compose",
+            data={
+                "to_participants": "prod-codex",
+                "message_kind": "text",
+                "payload_json": '{"body":"compose"}',
+                "content_text": "compose message",
+                "correlation_id": "corr-compose-form",
+                "subject": "compose form",
+                "thread_id": "",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303, response.text
+    assert response.headers["location"].startswith("/web/collab/threads/")
+
+
+def test_operator_compose_form_can_send_to_existing_thread_without_subject(
+    api_harness, operator_token
+):
+    with TestClient(api_harness.app) as browser:
+        browser.headers.update(api_harness.client.headers)
+        browser.cookies.set("op_token", operator_token)
+        created = browser.post(
+            "/web/collab/compose",
+            data={
+                "to_participants": "prod-codex",
+                "message_kind": "text",
+                "payload_json": '{"body":"first"}',
+                "content_text": "first message",
+                "correlation_id": "corr-compose-existing-first",
+                "subject": "compose existing thread",
+                "thread_id": "",
+            },
+            follow_redirects=False,
+        )
+        assert created.status_code == 303, created.text
+        thread_id = created.headers["location"].rsplit("/", 1)[-1]
+
+        response = browser.post(
+            "/web/collab/compose",
+            data={
+                "to_participants": "prod-codex",
+                "message_kind": "text",
+                "payload_json": '{"body":"second"}',
+                "content_text": "second message",
+                "correlation_id": "corr-compose-existing-second",
+                "subject": "",
+                "thread_id": thread_id,
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303, response.text
+    assert response.headers["location"] == f"/web/collab/threads/{thread_id}"
+
+
+def test_collaboration_templates_use_safe_client_content_renderer():
+    root = Path(__file__).resolve().parents[1]
+    collab_base = (root / "src" / "agent_broker" / "templates" / "collab_base.html").read_text(
+        encoding="utf-8"
+    )
+    renderer = (root / "src" / "agent_broker" / "static" / "collab_render.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "marked.min.js" in collab_base
+    assert "purify.min.js" in collab_base
+    assert "highlight.min.js" in collab_base
+    assert "DOMPurify.sanitize" in renderer
+    assert "output.innerHTML = rendered" in renderer
+    assert "DOMPurify.sanitize(html)" in renderer
+
+
 def test_v3_operator_rosters_exclude_probe_and_operator_identities(
     api_harness,
     operator_token,

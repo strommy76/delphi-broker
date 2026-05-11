@@ -1,4 +1,5 @@
-{% extends "base.html" %}
+{% extends "collab_base.html" %}
+{% from "collab_content.html" import render_content %}
 {% block title %}Collaboration Thread{% endblock %}
 {% block content %}
 <section>
@@ -14,19 +15,19 @@
         <p class="card-meta">
           {{ entry.draft.created_ts }} · {{ entry.draft.correlation_id }}
         </p>
-        <div class="card-body-full">{{ entry.draft.content_text }}</div>
+        {{ render_content(entry.draft.content_text) }}
       {% elif entry.entry_type == "decision" %}
         <p class="card-meta">
           {{ entry.decision.decision_ts }} · {{ entry.decision.decision_type }}
         </p>
         {% if entry.decision.final_content_text %}
-          <div class="card-body-full">{{ entry.decision.final_content_text }}</div>
+          {{ render_content(entry.decision.final_content_text) }}
         {% endif %}
       {% elif entry.entry_type == "deliverable" %}
         <p class="card-meta">
           {{ entry.deliverable.created_ts }} · {{ entry.deliverable.correlation_id }}
         </p>
-        <div class="card-body-full">{{ entry.deliverable.content_text }}</div>
+        {{ render_content(entry.deliverable.content_text) }}
       {% elif entry.entry_type == "audit_event" %}
         <p class="card-meta">
           {{ entry.event.event_ts }} · {{ entry.event.event_kind }} · {{ entry.event.participant_id }}

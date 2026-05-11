@@ -12,7 +12,11 @@ from .. import database as db
 from ..config import DB_PATH, OPERATOR_PARTICIPANT_ID, require_operator_token
 from ..peer.peer_contracts import ParticipantRef
 from ..routes.web import OP_TOKEN_COOKIE
-from .collab_contracts import CollabGetThreadRequest, OperatorDecisionRequest
+from .collab_contracts import (
+    CollabGetThreadRequest,
+    OperatorDecisionRequest,
+    OperatorMessageRequest,
+)
 from .services import COLLABORATION_SERVICE, IDENTITY_SERVICE
 
 router = APIRouter(prefix="/api/v1/collab")
@@ -43,6 +47,18 @@ class RejectBody(BaseModel):
     reason: str | None = None
 
 
+class OperatorMessageBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    to_participants: list[str]
+    message_kind: str
+    payload_json: dict[str, Any]
+    content_text: str
+    correlation_id: str
+    thread_id: str | None = None
+    subject: str | None = None
+
+
 def _conn():
     return db.get_connection(DB_PATH)
 
@@ -53,7 +69,12 @@ def _verify_operator(
 ) -> None:
     expected = require_operator_token()
     supplied = x_operator_token or op_token
-    if not supplied or not secrets.compare_digest(supplied, expected):
+    if not supplied:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="operator token required",
+        )
+    if not secrets.compare_digest(supplied, expected):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="invalid operator token",
@@ -88,6 +109,35 @@ def list_pending_drafts(
     conn = _conn()
     try:
         return COLLABORATION_SERVICE.list_pending_drafts(conn, include_probes=include_probes)
+    finally:
+        conn.close()
+
+
+@router.post("/operator-message")
+def operator_message(
+    body: OperatorMessageBody,
+    _operator=Depends(_verify_operator),
+) -> dict:
+    conn = _conn()
+    try:
+        response = COLLABORATION_SERVICE.send_operator_message(
+            conn,
+            OperatorMessageRequest(
+                operator_participant=_operator_ref(),
+                to_participants=_participants(body.to_participants),
+                message_kind=body.message_kind,
+                payload_json=body.payload_json,
+                content_text=body.content_text,
+                correlation_id=body.correlation_id,
+                thread_id=body.thread_id,
+                subject=body.subject,
+            ),
+        )
+        if response.error is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=response.error.reason
+            )
+        return response.model_dump(mode="json")
     finally:
         conn.close()
 

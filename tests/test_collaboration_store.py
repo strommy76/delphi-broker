@@ -293,6 +293,150 @@ def test_collab_deliverable_requires_approved_decision():
         conn.close()
 
 
+def test_operator_initiated_deliverable_satisfies_approval_guard():
+    conn = _conn()
+    try:
+        conn.executescript("""
+            INSERT INTO collab_threads VALUES
+                ('thread-1', '2026-05-09T00:00:00+00:00', 'operator message', 'open');
+            INSERT INTO collab_drafts
+                (draft_id, thread_id, from_participant, from_participant_type,
+                 from_transport_type, kind, payload_json, content_text,
+                 correlation_id, created_ts)
+            VALUES
+                ('draft-1', 'thread-1', 'operator', 'operator', 'http', 'text',
+                 '{"body":"operator"}', 'operator', 'corr-operator',
+                 '2026-05-09T00:00:01+00:00');
+            INSERT INTO collab_draft_recipients
+                (draft_id, recipient_participant, recipient_type,
+                 recipient_transport, recipient_order)
+            VALUES ('draft-1', 'prod-codex', 'agent', 'mcp', 0);
+            INSERT INTO collab_events
+                (event_id, draft_id, decision_id, deliverable_id, participant_id,
+                 event_kind, event_ts, detail_json)
+            VALUES
+                ('event-draft-1', 'draft-1', NULL, NULL, 'operator',
+                 'operator_composed', '2026-05-09T00:00:01+00:00', '{}');
+            INSERT INTO collab_operator_decisions
+                (decision_id, draft_id, operator_participant, decision_type,
+                 final_payload_json, final_content_text, reason, decision_ts)
+            VALUES
+                ('decision-1', 'draft-1', 'operator', 'operator_initiated',
+                 '{"body":"operator"}', 'operator', NULL,
+                 '2026-05-09T00:00:02+00:00');
+            INSERT INTO collab_decision_recipients
+                (decision_id, recipient_participant, recipient_type,
+                 recipient_transport, recipient_order)
+            VALUES ('decision-1', 'prod-codex', 'agent', 'mcp', 0);
+            INSERT INTO collab_events
+                (event_id, draft_id, decision_id, deliverable_id, participant_id,
+                 event_kind, event_ts, detail_json)
+            VALUES
+                ('event-decision-1', 'draft-1', 'decision-1', NULL, 'operator',
+                 'operator_initiated_message', '2026-05-09T00:00:02+00:00', '{}');
+        """)
+
+        conn.execute(
+            """INSERT INTO collab_deliverables
+                  (deliverable_id, draft_id, decision_id, thread_id,
+                   from_participant, from_participant_type, from_transport_type,
+                   kind, payload_json, content_text, correlation_id, created_ts)
+               VALUES
+                  ('deliverable-1', 'draft-1', 'decision-1', 'thread-1',
+                   'operator', 'operator', 'http', 'text',
+                   '{"body":"operator"}', 'operator', 'corr-operator',
+                   '2026-05-09T00:00:03+00:00')"""
+        )
+    finally:
+        conn.close()
+
+
+def test_operator_initiated_decision_type_migrates_existing_store():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.executescript("""
+            CREATE TABLE collab_threads (
+                thread_id  TEXT PRIMARY KEY,
+                created_ts TEXT NOT NULL,
+                subject    TEXT NOT NULL,
+                status     TEXT NOT NULL CHECK(status IN ('open', 'closed', 'archived'))
+            );
+            CREATE TABLE collab_drafts (
+                draft_id               TEXT PRIMARY KEY,
+                thread_id              TEXT NOT NULL,
+                from_participant       TEXT NOT NULL,
+                from_participant_type  TEXT NOT NULL,
+                from_transport_type    TEXT NOT NULL,
+                kind                   TEXT NOT NULL,
+                payload_json           TEXT NOT NULL,
+                content_text           TEXT NOT NULL,
+                correlation_id         TEXT NOT NULL,
+                created_ts             TEXT NOT NULL,
+                UNIQUE(from_participant, correlation_id),
+                FOREIGN KEY(thread_id) REFERENCES collab_threads(thread_id)
+            );
+            CREATE TABLE collab_operator_decisions (
+                decision_id            TEXT PRIMARY KEY,
+                draft_id               TEXT NOT NULL UNIQUE,
+                operator_participant   TEXT NOT NULL,
+                decision_type          TEXT NOT NULL CHECK(
+                    decision_type IN (
+                        'approve',
+                        'edit_and_approve',
+                        'redirect_and_approve',
+                        'reject'
+                    )
+                ),
+                final_payload_json     TEXT,
+                final_content_text     TEXT,
+                reason                 TEXT,
+                decision_ts            TEXT NOT NULL,
+                FOREIGN KEY(draft_id) REFERENCES collab_drafts(draft_id)
+            );
+            INSERT INTO collab_threads VALUES
+                ('thread-1', '2026-05-09T00:00:00+00:00', 'existing', 'open'),
+                ('thread-2', '2026-05-09T00:01:00+00:00', 'operator', 'open');
+            INSERT INTO collab_drafts
+                (draft_id, thread_id, from_participant, from_participant_type,
+                 from_transport_type, kind, payload_json, content_text,
+                 correlation_id, created_ts)
+            VALUES
+                ('draft-1', 'thread-1', 'dev-codex', 'agent', 'mcp', 'text',
+                 '{"body":"existing"}', 'existing', 'corr-existing',
+                 '2026-05-09T00:00:01+00:00'),
+                ('draft-2', 'thread-2', 'operator', 'operator', 'http', 'text',
+                 '{"body":"operator"}', 'operator', 'corr-operator',
+                 '2026-05-09T00:01:01+00:00');
+            INSERT INTO collab_operator_decisions
+                (decision_id, draft_id, operator_participant, decision_type,
+                 final_payload_json, final_content_text, reason, decision_ts)
+            VALUES
+                ('decision-1', 'draft-1', 'operator', 'approve',
+                 '{"body":"existing"}', 'existing', NULL,
+                 '2026-05-09T00:00:02+00:00');
+        """)
+
+        collab_store.init_collab_schema(conn)
+
+        assert collab_store.get_decision(conn, "decision-1")["decision_type"] == "approve"
+        conn.execute(
+            """INSERT INTO collab_operator_decisions
+                  (decision_id, draft_id, operator_participant, decision_type,
+                   final_payload_json, final_content_text, reason, decision_ts)
+               VALUES
+                  ('decision-2', 'draft-2', 'operator', 'operator_initiated',
+                   '{"body":"operator"}', 'operator', NULL,
+                   '2026-05-09T00:01:02+00:00')"""
+        )
+        assert (
+            collab_store.get_decision(conn, "decision-2")["decision_type"] == "operator_initiated"
+        )
+    finally:
+        conn.close()
+
+
 def test_collab_deliverable_requires_operator_decision_event():
     conn = _conn()
     try:
@@ -328,6 +472,119 @@ def test_collab_deliverable_requires_operator_decision_event():
                        '{"body":"draft"}', 'draft', 'corr-1',
                        '2026-05-09T00:00:03+00:00')"""
             )
+    finally:
+        conn.close()
+
+
+def test_operator_message_record_rolls_back_if_decision_insert_fails():
+    conn = _conn()
+    try:
+        with pytest.raises(sqlite3.IntegrityError):
+            collab_store.record_operator_message(
+                conn,
+                create_thread_args={
+                    "thread_id": "thread-1",
+                    "subject": "operator message",
+                    "created_ts": "2026-05-09T00:00:00+00:00",
+                },
+                draft_args={
+                    "draft_id": "draft-1",
+                    "thread_id": "thread-1",
+                    "from_participant": "operator",
+                    "from_participant_type": "operator",
+                    "from_transport_type": "http",
+                    "kind": "text",
+                    "payload_json": {"body": "operator"},
+                    "content_text": "operator",
+                    "correlation_id": "corr-operator",
+                    "created_ts": "2026-05-09T00:00:01+00:00",
+                },
+                draft_recipient_args=[
+                    {
+                        "draft_id": "draft-1",
+                        "recipient_participant": "prod-codex",
+                        "recipient_type": "agent",
+                        "recipient_transport": "mcp",
+                        "recipient_order": 0,
+                    }
+                ],
+                decision_args={
+                    "decision_id": "decision-1",
+                    "draft_id": "draft-1",
+                    "operator_participant": "operator",
+                    "decision_type": "not_a_decision_type",
+                    "final_payload_json": {"body": "operator"},
+                    "final_content_text": "operator",
+                    "reason": None,
+                    "decision_ts": "2026-05-09T00:00:02+00:00",
+                },
+                decision_recipient_args=[
+                    {
+                        "decision_id": "decision-1",
+                        "recipient_participant": "prod-codex",
+                        "recipient_type": "agent",
+                        "recipient_transport": "mcp",
+                        "recipient_order": 0,
+                    }
+                ],
+                deliverable_args={
+                    "deliverable_id": "deliverable-1",
+                    "draft_id": "draft-1",
+                    "decision_id": "decision-1",
+                    "thread_id": "thread-1",
+                    "from_participant": "operator",
+                    "from_participant_type": "operator",
+                    "from_transport_type": "http",
+                    "kind": "text",
+                    "payload_json": {"body": "operator"},
+                    "content_text": "operator",
+                    "correlation_id": "corr-operator",
+                    "created_ts": "2026-05-09T00:00:03+00:00",
+                },
+                receipt_args=[
+                    {
+                        "deliverable_id": "deliverable-1",
+                        "recipient_participant": "prod-codex",
+                        "recipient_type": "agent",
+                        "recipient_transport": "mcp",
+                        "recipient_order": 0,
+                    }
+                ],
+                draft_event_args={
+                    "event_id": "event-draft-1",
+                    "draft_id": "draft-1",
+                    "decision_id": None,
+                    "deliverable_id": None,
+                    "participant_id": "operator",
+                    "event_kind": "operator_composed",
+                    "event_ts": "2026-05-09T00:00:01+00:00",
+                    "detail_json": {},
+                },
+                decision_event_args={
+                    "event_id": "event-decision-1",
+                    "draft_id": "draft-1",
+                    "decision_id": "decision-1",
+                    "deliverable_id": None,
+                    "participant_id": "operator",
+                    "event_kind": "operator_initiated_message",
+                    "event_ts": "2026-05-09T00:00:02+00:00",
+                    "detail_json": {},
+                },
+                deliverable_event_args={
+                    "event_id": "event-deliverable-1",
+                    "draft_id": "draft-1",
+                    "decision_id": "decision-1",
+                    "deliverable_id": "deliverable-1",
+                    "participant_id": "operator",
+                    "event_kind": "deliverable_created",
+                    "event_ts": "2026-05-09T00:00:03+00:00",
+                    "detail_json": {},
+                },
+            )
+
+        assert collab_store.get_draft(conn, "draft-1") is None
+        assert collab_store.get_decision(conn, "decision-1") is None
+        assert collab_store.get_deliverable(conn, "deliverable-1") is None
     finally:
         conn.close()
 

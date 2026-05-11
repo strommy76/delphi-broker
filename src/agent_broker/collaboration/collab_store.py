@@ -63,7 +63,8 @@ CREATE TABLE IF NOT EXISTS collab_operator_decisions (
             'approve',
             'edit_and_approve',
             'redirect_and_approve',
-            'reject'
+            'reject',
+            'operator_initiated'
         )
     ),
     final_payload_json     TEXT,
@@ -141,6 +142,26 @@ CREATE INDEX IF NOT EXISTS idx_collab_events_thread_lookup
     ON collab_events(draft_id, decision_id, deliverable_id, event_ts, event_id);
 """
 
+_TRIGGER_DROP_SCHEMA = """
+DROP TRIGGER IF EXISTS collab_drafts_no_update;
+DROP TRIGGER IF EXISTS collab_drafts_no_delete;
+DROP TRIGGER IF EXISTS collab_draft_recipients_no_update;
+DROP TRIGGER IF EXISTS collab_draft_recipients_no_delete;
+DROP TRIGGER IF EXISTS collab_draft_recipients_closed_after_draft_created;
+DROP TRIGGER IF EXISTS collab_operator_decisions_no_update;
+DROP TRIGGER IF EXISTS collab_operator_decisions_no_delete;
+DROP TRIGGER IF EXISTS collab_decision_recipients_no_update;
+DROP TRIGGER IF EXISTS collab_decision_recipients_no_delete;
+DROP TRIGGER IF EXISTS collab_decision_recipients_closed_after_operator_decision;
+DROP TRIGGER IF EXISTS collab_deliverables_require_approval;
+DROP TRIGGER IF EXISTS collab_deliverables_no_update;
+DROP TRIGGER IF EXISTS collab_deliverables_no_delete;
+DROP TRIGGER IF EXISTS collab_events_no_update;
+DROP TRIGGER IF EXISTS collab_events_no_delete;
+DROP TRIGGER IF EXISTS collab_receipts_state_guard;
+DROP TRIGGER IF EXISTS collab_receipts_require_decision_recipient;
+"""
+
 _TRIGGER_SCHEMA = """
 CREATE TRIGGER IF NOT EXISTS collab_drafts_no_update
 BEFORE UPDATE ON collab_drafts
@@ -214,7 +235,10 @@ BEGIN
               JOIN collab_events e
                 ON e.decision_id = d.decision_id
                AND e.draft_id = d.draft_id
-               AND e.event_kind = 'operator_' || d.decision_type
+               AND e.event_kind = CASE d.decision_type
+                   WHEN 'operator_initiated' THEN 'operator_initiated_message'
+                   ELSE 'operator_' || d.decision_type
+               END
              WHERE d.decision_id = NEW.decision_id
         )
         THEN RAISE(ABORT, 'collab_decision_recipients closed after operator decision')
@@ -235,7 +259,8 @@ BEGIN
                AND d.decision_type IN (
                    'approve',
                    'edit_and_approve',
-                   'redirect_and_approve'
+                   'redirect_and_approve',
+                   'operator_initiated'
                )
         )
         THEN RAISE(ABORT, 'collab_deliverable requires approved decision')
@@ -247,7 +272,10 @@ BEGIN
               JOIN collab_events e
                 ON e.decision_id = d.decision_id
                AND e.draft_id = d.draft_id
-               AND e.event_kind = 'operator_' || d.decision_type
+               AND e.event_kind = CASE d.decision_type
+                   WHEN 'operator_initiated' THEN 'operator_initiated_message'
+                   ELSE 'operator_' || d.decision_type
+               END
              WHERE d.decision_id = NEW.decision_id
                AND d.draft_id = NEW.draft_id
         )
@@ -353,8 +381,71 @@ def init_collab_schema(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(_TABLE_SCHEMA)
     conn.executescript(_INDEX_SCHEMA)
+    conn.executescript(_TRIGGER_DROP_SCHEMA)
+    _migrate_operator_initiated_decision_type(conn)
     conn.executescript(_TRIGGER_SCHEMA)
     conn.commit()
+
+
+def _migrate_operator_initiated_decision_type(conn: sqlite3.Connection) -> None:
+    table = _row(
+        conn.execute(
+            """SELECT sql FROM sqlite_master
+                 WHERE type = 'table' AND name = 'collab_operator_decisions'"""
+        )
+    )
+    if table is None:
+        raise RuntimeError("collab_operator_decisions table missing after schema initialization")
+    if "operator_initiated" in table["sql"]:
+        return
+
+    conn.commit()
+    original_foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+    try:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("PRAGMA legacy_alter_table=ON")
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "ALTER TABLE collab_operator_decisions RENAME TO collab_operator_decisions_old"
+        )
+        conn.execute(
+            """CREATE TABLE collab_operator_decisions (
+                decision_id            TEXT PRIMARY KEY,
+                draft_id               TEXT NOT NULL UNIQUE,
+                operator_participant   TEXT NOT NULL,
+                decision_type          TEXT NOT NULL CHECK(
+                    decision_type IN (
+                        'approve',
+                        'edit_and_approve',
+                        'redirect_and_approve',
+                        'reject',
+                        'operator_initiated'
+                    )
+                ),
+                final_payload_json     TEXT,
+                final_content_text     TEXT,
+                reason                 TEXT,
+                decision_ts            TEXT NOT NULL,
+                FOREIGN KEY(draft_id) REFERENCES collab_drafts(draft_id)
+            )"""
+        )
+        conn.execute(
+            """INSERT INTO collab_operator_decisions
+                  (decision_id, draft_id, operator_participant, decision_type,
+                   final_payload_json, final_content_text, reason, decision_ts)
+               SELECT decision_id, draft_id, operator_participant, decision_type,
+                      final_payload_json, final_content_text, reason, decision_ts
+                 FROM collab_operator_decisions_old"""
+        )
+        conn.execute("DROP TABLE collab_operator_decisions_old")
+    except Exception:
+        conn.rollback()
+        raise
+    else:
+        conn.commit()
+    finally:
+        conn.execute("PRAGMA legacy_alter_table=OFF")
+        conn.execute(f"PRAGMA foreign_keys={int(original_foreign_keys)}")
 
 
 def utc_now() -> str:
@@ -739,6 +830,55 @@ def record_decision(
     if deliverable_args is not None and deliverable is None:
         raise RuntimeError("collaboration deliverable committed but row was not found")
     return decision, deliverable
+
+
+def record_operator_message(
+    conn: sqlite3.Connection,
+    *,
+    create_thread_args: dict[str, Any] | None,
+    draft_args: dict[str, Any],
+    draft_recipient_args: Sequence[dict[str, Any]],
+    decision_args: dict[str, Any],
+    decision_recipient_args: Sequence[dict[str, Any]],
+    deliverable_args: dict[str, Any],
+    receipt_args: Sequence[dict[str, Any]],
+    draft_event_args: dict[str, Any],
+    decision_event_args: dict[str, Any],
+    deliverable_event_args: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    try:
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        if create_thread_args is not None:
+            _insert_thread_no_commit(conn, **create_thread_args)
+        _insert_draft_no_commit(conn, **draft_args)
+        for recipient in draft_recipient_args:
+            _insert_draft_recipient_no_commit(conn, **recipient)
+        _insert_event_no_commit(conn, **draft_event_args)
+        _insert_decision_no_commit(conn, **decision_args)
+        for recipient in decision_recipient_args:
+            _insert_decision_recipient_no_commit(conn, **recipient)
+        _insert_event_no_commit(conn, **decision_event_args)
+        _insert_deliverable_no_commit(conn, **deliverable_args)
+        _insert_event_no_commit(conn, **deliverable_event_args)
+        for receipt in receipt_args:
+            _insert_receipt_no_commit(conn, **receipt)
+    except Exception:
+        conn.rollback()
+        raise
+    else:
+        conn.commit()
+
+    draft = get_draft(conn, draft_args["draft_id"])
+    decision = get_decision(conn, decision_args["decision_id"])
+    deliverable = get_deliverable(conn, deliverable_args["deliverable_id"])
+    if draft is None:
+        raise RuntimeError("operator message draft committed but row was not found")
+    if decision is None:
+        raise RuntimeError("operator message decision committed but row was not found")
+    if deliverable is None:
+        raise RuntimeError("operator message deliverable committed but row was not found")
+    return draft, decision, deliverable
 
 
 def get_deliverable(conn: sqlite3.Connection, deliverable_id: str) -> dict[str, Any] | None:

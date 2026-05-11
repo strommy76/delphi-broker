@@ -398,6 +398,13 @@ Operator approval is load-bearing server authority. No agent-authored
 collaboration draft is deliverable to a recipient participant until an
 operator decision approves, edits-and-approves, or redirects-and-approves it.
 
+Operator-authored collaboration messages are a separate lifecycle class. The
+operator is both sender and decision authority, so the broker records the
+draft, `operator_initiated` authority record, deliverable, receipts, and audit
+events atomically in one transaction. This does not weaken the agent-authored
+no-bypass rule; it models a different actor class whose authority is already
+bound to `DELPHI_OPERATOR_TOKEN`.
+
 The approval check is enforced in the collaboration delivery authority and by
 store-layer fail-loud guards where the invariant is representable in SQLite.
 MCP, HTTP, web, and helper adapters are projections over that authority; they
@@ -497,6 +504,8 @@ independent persistence authorities.
 
 ### Collaboration Lifecycle
 
+Agent-authored lifecycle:
+
 ```
 draft_created
   -> pending_operator_decision
@@ -514,6 +523,22 @@ approved / edited_and_approved / redirected_and_approved
 The operator decision preserves the original draft, the decision record, the
 final deliverable form when applicable, and correlation across all audit
 events. Rejected drafts never become deliverable.
+
+Operator-authored lifecycle:
+
+```
+operator_composed
+  -> operator_initiated
+  -> deliverable
+  -> delivered
+  -> acked
+```
+
+The `operator_initiated` decision type is terminal authority evidence. Store
+guards treat it as approved only when the matching operator decision event is
+`operator_initiated_message`. Agent-authored approved decision events remain
+`operator_approve`, `operator_edit_and_approve`, or
+`operator_redirect_and_approve`.
 
 Recipient visibility is approval-gated. A recipient calling the collaboration
 thread view before approval does not see draft bodies addressed to them.
@@ -538,6 +563,11 @@ Approval, delivery, and ack operations are also idempotent:
 - A repeated ack by the authorized recipient reports the existing ack state.
 - An ack by a non-recipient fails loud.
 
+Operator-authored submission idempotency uses the same `(from_participant,
+correlation_id)` key. A retry with the same operator, same correlation id, and
+same canonical payload returns the existing authority/deliverable state. A
+retry with a different canonical payload fails loud.
+
 ### Store-Layer Guards
 
 The collaboration store enforces invariants below, either with SQLite
@@ -551,10 +581,11 @@ express the condition cleanly:
   or operator-decision audit event.
 - Operator decisions are append-only and reference an existing draft.
 - Deliverables reference an approved / edited-and-approved /
-  redirected-and-approved decision. A deliverable without approval evidence is
-  rejected. Deliverable sender, content, payload, correlation, and thread
-  identity must match the authorized decision/draft form. Deliverable creation
-  requires the corresponding operator-decision audit event.
+  redirected-and-approved / operator-initiated decision. A deliverable without
+  approval evidence is rejected. Deliverable sender, content, payload,
+  correlation, and thread identity must match the authorized decision/draft
+  form. Deliverable creation requires the corresponding operator-decision audit
+  event.
 - Receipts reference deliverables, not drafts. A receipt cannot exist for an
   unapproved draft, for a participant outside the decision-recipient set, or
   with recipient metadata/order that differs from the approved decision
@@ -584,6 +615,7 @@ broker decisions.
 Operator HTTP/web surfaces cover:
 
 - pending draft queue
+- operator-authored compose
 - approve as-is
 - edit and approve
 - redirect and approve
@@ -594,6 +626,23 @@ Operator HTTP/web surfaces cover:
 
 Operator authority remains bound to `DELPHI_OPERATOR_TOKEN`; no new auth model
 is introduced.
+
+Operator-authored messages enter through HTTP/web using the existing operator
+auth model: `X-Operator-Token` or the web operator session cookie backed by
+`DELPHI_OPERATOR_TOKEN`. They do not use agent HMAC signing, and an agent HMAC
+payload without an operator token is unauthenticated for the operator route.
+
+There is no operator MCP tool in the MVP. Agents receive operator-authored
+messages through the existing `collab_poll`, `collab_ack`, and
+`collab_get_thread` surfaces.
+
+Collaboration `content_text` remains raw free-form text in SQLite. Operator UI
+rendering is a presentation concern: collaboration pages render content in the
+browser using the Lexx client-side pattern of markdown parsing followed by
+DOMPurify sanitization and code-block highlighting. Raw HTML from
+`content_text` is never trusted; DOMPurify is mandatory before any rendered
+HTML is inserted into the page. If the client-side renderer is unavailable,
+escaped preformatted text remains visible.
 
 ### Delivery Model
 

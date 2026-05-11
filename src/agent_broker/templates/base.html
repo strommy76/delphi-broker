@@ -13,6 +13,7 @@
     <a href="/web/v3/">Tasks</a>
     <a href="/web/v3/new">New Task</a>
     <a href="/web/collab/drafts">Collaboration</a>
+    <a href="/web/collab/compose">Compose</a>
     <a href="/web/peer/threads?limit=50&offset=0">Peer Transcript</a>
     <a href="/web/" style="opacity:0.6;font-size:0.85em;">v2 sessions</a>
     <form action="/web/logout" method="post" style="display:inline;margin-left:auto;">
@@ -20,5 +21,6 @@
     </form>
   </nav>
   {% block content %}{% endblock %}
+  {% block scripts %}{% endblock %}
 </body>
 </html>

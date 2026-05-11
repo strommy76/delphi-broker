@@ -7,6 +7,7 @@ from agent_broker.collaboration.collab_contracts import (
     CollabAckRequest,
     CollabGetThreadRequest,
     CollabPollRequest,
+    OperatorMessageRequest,
     OperatorDecisionRequest,
     ProposeMessageRequest,
 )
@@ -185,6 +186,122 @@ def _operator_request(
         to_participants=to_participants,
         reason=None,
     )
+
+
+def _operator_message_request(
+    correlation_id: str = "corr-operator-message",
+    *,
+    content_text: str = "operator-authored message",
+) -> OperatorMessageRequest:
+    return OperatorMessageRequest(
+        operator_participant=_participant(
+            "operator",
+            participant_type="operator",
+            transport_type="http",
+            collaboration_governed=False,
+            is_decision_authority=True,
+        ),
+        to_participants=(_participant("prod-codex"),),
+        message_kind="text",
+        payload_json={"body": content_text},
+        content_text=content_text,
+        correlation_id=correlation_id,
+        thread_id=None,
+        subject="operator message",
+    )
+
+
+def test_operator_initiated_message_is_atomic_authority_and_pollable():
+    conn = _conn()
+    try:
+        service = _service()
+        created = service.send_operator_message(conn, _operator_message_request())
+        assert created.error is None
+        assert created.draft is not None
+        assert created.decision is not None
+        assert created.deliverable is not None
+        assert created.draft.from_participant.participant_id == "operator"
+        assert created.decision.decision_type == "operator_initiated"
+        assert created.deliverable.from_participant.participant_id == "operator"
+
+        events = collab_store.list_events_for_refs(
+            conn,
+            draft_ids=(created.draft.draft_id,),
+            decision_ids=(created.decision.decision_id,),
+            deliverable_ids=(created.deliverable.deliverable_id,),
+        )
+        assert {event["event_kind"] for event in events} == {
+            "operator_composed",
+            "operator_initiated_message",
+            "deliverable_created",
+        }
+        assert len(events) == 3
+
+        polled = service.poll(
+            conn,
+            CollabPollRequest(participant=_participant("prod-codex"), limit=10),
+        )
+        assert polled.error is None
+        assert [item.deliverable_id for item in polled.deliverables] == [
+            created.deliverable.deliverable_id
+        ]
+        acked = service.ack(
+            conn,
+            CollabAckRequest(
+                participant=_participant("prod-codex"),
+                deliverable_id=created.deliverable.deliverable_id,
+            ),
+        )
+        assert acked.error is None
+    finally:
+        conn.close()
+
+
+def test_operator_initiated_idempotency_conflict_fails_loud():
+    conn = _conn()
+    try:
+        service = _service()
+        first = service.send_operator_message(conn, _operator_message_request("corr-operator-idem"))
+        assert first.error is None
+        second = service.send_operator_message(
+            conn, _operator_message_request("corr-operator-idem")
+        )
+        assert second.error is None
+        assert second.draft is not None
+        assert first.draft is not None
+        assert second.draft.draft_id == first.draft.draft_id
+
+        conflict = service.send_operator_message(
+            conn,
+            _operator_message_request(
+                "corr-operator-idem",
+                content_text="different operator-authored message",
+            ),
+        )
+        assert conflict.error is not None
+        assert conflict.error.error == "idempotency_conflict"
+    finally:
+        conn.close()
+
+
+def test_operator_initiated_decision_type_rejected_on_agent_draft_decision_path():
+    conn = _conn()
+    try:
+        service = _service()
+        proposed = service.propose(conn, _proposal("corr-operator-type-rejected"))
+        assert proposed.error is None
+        assert proposed.draft is not None
+        decision = service.decide(
+            conn,
+            _operator_request(
+                proposed.draft.draft_id,
+                decision_type="operator_initiated",
+            ),
+        )
+        assert decision.error is not None
+        assert decision.error.error == "invalid_payload"
+    finally:
+        conn.close()
 
 
 def test_collaboration_approval_gates_delivery_and_ack():

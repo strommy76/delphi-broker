@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import secrets
 
 from fastapi import APIRouter, Cookie, Form, HTTPException, Query, Request, status
@@ -11,7 +12,11 @@ from .. import database as db
 from ..config import DB_PATH, OPERATOR_PARTICIPANT_ID, require_operator_token
 from ..peer.peer_contracts import ParticipantRef
 from ..routes.web import OP_TOKEN_COOKIE, templates
-from .collab_contracts import CollabGetThreadRequest, OperatorDecisionRequest
+from .collab_contracts import (
+    CollabGetThreadRequest,
+    OperatorDecisionRequest,
+    OperatorMessageRequest,
+)
 from .services import COLLABORATION_SERVICE, IDENTITY_SERVICE
 
 router = APIRouter(prefix="/web/collab")
@@ -36,6 +41,14 @@ def _operator_ref() -> ParticipantRef:
     return operator
 
 
+def _collaboration_recipient_options() -> tuple[ParticipantRef, ...]:
+    return tuple(
+        participant
+        for participant in IDENTITY_SERVICE.all_participants()
+        if participant.collaboration_governed and not participant.is_probe
+    )
+
+
 @router.get("/drafts", response_class=HTMLResponse)
 def drafts_list(
     request: Request,
@@ -58,6 +71,112 @@ def drafts_list(
             "payload": payload,
             "include_probes": include_probes,
         },
+    )
+
+
+@router.get("/compose", response_class=HTMLResponse)
+def compose_message(
+    request: Request,
+    op_token: str | None = Cookie(default=None, alias=OP_TOKEN_COOKIE),
+):
+    _require_web_operator(op_token)
+    return templates.TemplateResponse(
+        request=request,
+        name="collab_compose.html",
+        context={
+            "participants": _collaboration_recipient_options(),
+            "form": {},
+            "error": None,
+        },
+    )
+
+
+@router.post("/compose", response_class=HTMLResponse)
+def submit_operator_message(
+    request: Request,
+    to_participants: list[str] = Form(...),
+    message_kind: str = Form(default="text"),
+    payload_json: str = Form(default="{}"),
+    content_text: str = Form(...),
+    correlation_id: str = Form(...),
+    subject: str = Form(default=""),
+    thread_id: str = Form(default=""),
+    op_token: str | None = Cookie(default=None, alias=OP_TOKEN_COOKIE),
+):
+    _require_web_operator(op_token)
+    try:
+        payload = json.loads(payload_json)
+        if not isinstance(payload, dict):
+            raise ValueError("payload_json must be a JSON object")
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request=request,
+            name="collab_compose.html",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            context={
+                "participants": _collaboration_recipient_options(),
+                "form": {
+                    "to_participants": to_participants,
+                    "message_kind": message_kind,
+                    "payload_json": payload_json,
+                    "content_text": content_text,
+                    "correlation_id": correlation_id,
+                    "subject": subject,
+                    "thread_id": thread_id,
+                },
+                "error": str(exc),
+            },
+        )
+    recipients = []
+    for participant_id in to_participants:
+        participant = IDENTITY_SERVICE.resolve(participant_id)
+        if participant is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"unknown participant {participant_id!r}",
+            )
+        recipients.append(participant)
+    conn = _conn()
+    try:
+        response = COLLABORATION_SERVICE.send_operator_message(
+            conn,
+            OperatorMessageRequest(
+                operator_participant=_operator_ref(),
+                to_participants=tuple(recipients),
+                message_kind=message_kind,
+                payload_json=payload,
+                content_text=content_text,
+                correlation_id=correlation_id,
+                thread_id=thread_id.strip() or None,
+                subject=subject,
+            ),
+        )
+    finally:
+        conn.close()
+    if response.error is not None:
+        return templates.TemplateResponse(
+            request=request,
+            name="collab_compose.html",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            context={
+                "participants": _collaboration_recipient_options(),
+                "form": {
+                    "to_participants": to_participants,
+                    "message_kind": message_kind,
+                    "payload_json": payload_json,
+                    "content_text": content_text,
+                    "correlation_id": correlation_id,
+                    "subject": subject,
+                    "thread_id": thread_id,
+                },
+                "error": response.error.reason,
+            },
+        )
+    if response.draft is None:
+        raise RuntimeError("operator message response missing draft")
+    return RedirectResponse(
+        f"/web/collab/threads/{response.draft.thread_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
     )
 
 
