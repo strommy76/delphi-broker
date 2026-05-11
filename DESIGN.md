@@ -431,6 +431,42 @@ Per-message governance overrides are out of scope for the MVP. They can be
 introduced later only with explicit conflict-resolution rules between
 participant policy and message policy.
 
+### Paradigm Direction
+
+The two-lane shape (peer for non-governed, collab for governed) is a
+transitional accommodation, not the target paradigm. The operator-acknowledged
+collaboration substrate is the canonical channel for all agent-to-agent
+communication. The peer lane survives only to preserve existing non-governed
+Pi participant traffic during migration.
+
+Target end state: every agent participant carries `collaboration_governed:
+true`, and `collab_propose_message` is the single agent-to-agent send path.
+Routine ops messages (status pings, acks, log relay, calibration coordination)
+flow through the same operator approval as substantive collaboration messages;
+the operator-acknowledgment friction is light by design and falls to a single
+approve action for routine traffic.
+
+Rationale for universal coverage rather than per-traffic-class lanes: the
+prior non-governed peer model required operator attention informally after
+side effects had fired (read the agent's summary, course-correct downstream,
+relay to recipient). Moving the operator gate upstream of the send is
+net-equivalent or net-positive on operator wall-clock, because corrected
+messages no longer waste a downstream round. The audit trail and the
+single-channel discipline are additional gains.
+
+`peer_*` for agent-to-agent traffic is legacy in transition. It retires once
+all participants migrate to collaboration governance. The property-scoped
+guard at the peer delivery authority preserves the no-bypass invariant during
+the migration window. After migration, the guard and the peer agent-to-agent
+path retire together as phantom code.
+
+Pi participant migration is sequenced after current ship-train completion to
+avoid mid-flight substrate retrofit. The agents.json flip from
+`collaboration_governed: false` to `true` is the entire migration mechanism
+for participants whose code already uses the broker via signed canonical
+fields; Pi-Claude and Pi-Codex existing call sites swap `peer_send` for
+`collab_propose_message` without identity reissue.
+
 ### Persistence Classification
 
 SQLite remains the SSOT for broker communication state.
