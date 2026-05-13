@@ -328,7 +328,7 @@ def create_dispatch(
         raise ValueError(f"task {task_id!r} not found")
     if worker_id == task["orchestrator_id"]:
         raise ValueError(
-            f"orchestrator {worker_id!r} cannot dispatch to themselves " "(independence rule)"
+            f"orchestrator {worker_id!r} cannot dispatch to themselves (independence rule)"
         )
     cur = conn.execute(
         """SELECT 1 FROM agents
@@ -620,8 +620,7 @@ def list_events(
     limit: int = 500,
 ) -> list[dict[str, Any]]:
     cur = conn.execute(
-        "SELECT * FROM v3_task_events WHERE task_id = ? "
-        "ORDER BY occurred_at ASC, id ASC LIMIT ?",
+        "SELECT * FROM v3_task_events WHERE task_id = ? ORDER BY occurred_at ASC, id ASC LIMIT ?",
         (task_id, int(limit)),
     )
     return _rows(cur)

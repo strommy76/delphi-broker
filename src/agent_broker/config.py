@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import ipaddress
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -83,10 +84,34 @@ def _require_csv_env(name: str) -> tuple[str, ...]:
     return values
 
 
+def _require_present_env(name: str) -> str:
+    value = os.environ.get(name)
+    if value is None:
+        raise RuntimeError(f"{name} is required")
+    return value.strip()
+
+
+def _require_cidr_csv_env(
+    name: str,
+) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    raw_value = _require_present_env(name)
+    values = tuple(part.strip() for part in raw_value.split(",") if part.strip())
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for value in values:
+        try:
+            networks.append(ipaddress.ip_network(value, strict=True))
+        except ValueError as exc:
+            raise RuntimeError(f"{name} contains invalid CIDR {value!r}") from exc
+    return tuple(networks)
+
+
 HOST: str = _require_env("DELPHI_HOST")
 PORT: int = _require_int_env("DELPHI_PORT")
 MCP_HOST_REGISTRY: tuple[str, ...] = _require_csv_env("DELPHI_MCP_HOST_REGISTRY")
 MCP_ORIGIN_REGISTRY: tuple[str, ...] = _require_csv_env("DELPHI_MCP_ORIGIN_REGISTRY")
+ORIGINLESS_TRUSTED_INGRESS_CIDRS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
+    _require_cidr_csv_env("DELPHI_ORIGINLESS_TRUSTED_INGRESS_CIDRS")
+)
 
 _db_path_raw = _require_env("DELPHI_DB_PATH")
 DB_PATH: Path = (
@@ -183,6 +208,7 @@ for _agent in SEED_AGENTS:
     _participant_type = _agent.get("participant_type")
     _transport_type = _agent.get("transport_type")
     _is_probe = _agent.get("is_probe")
+    _collaboration_governed = _agent.get("collaboration_governed")
     _missing = [
         _field
         for _field, _value in (
@@ -192,14 +218,13 @@ for _agent in SEED_AGENTS:
             ("participant_type", _participant_type),
             ("transport_type", _transport_type),
             ("is_probe", _is_probe),
+            ("collaboration_governed", _collaboration_governed),
         )
         if _value is None or _value == ""
     ]
     if _missing:
         raise ValueError(
-            f"Agent entry in {_agents_file} missing required field "
-            f"{'/'.join(_missing)}: "
-            f"{_agent!r}"
+            f"Agent entry in {_agents_file} missing required field {'/'.join(_missing)}: {_agent!r}"
         )
     if _role not in _VALID_ROLES:
         raise ValueError(
@@ -210,6 +235,11 @@ for _agent in SEED_AGENTS:
         raise ValueError(
             f"Agent '{_agent_id}' has invalid is_probe {_is_probe!r} in {_agents_file}; "
             "expected true or false"
+        )
+    if not isinstance(_collaboration_governed, bool):
+        raise ValueError(
+            f"Agent '{_agent_id}' has invalid collaboration_governed "
+            f"{_collaboration_governed!r} in {_agents_file}; expected true or false"
         )
     _secret = (_agent.get("secret") or "").strip()
     if _secret and not _secret.startswith("GENERATE_WITH"):
@@ -226,7 +256,7 @@ if _secrets_file.exists():
     _secrets_data = json.loads(_secrets_file.read_text())
     if not isinstance(_secrets_data, dict):
         raise ValueError(
-            f"{_secrets_file}: top-level must be a JSON object " "of {agent_id: hex_secret}"
+            f"{_secrets_file}: top-level must be a JSON object of {{agent_id: hex_secret}}"
         )
     for _agent_id, _secret_value in _secrets_data.items():
         if not isinstance(_secret_value, str) or not _secret_value.strip():

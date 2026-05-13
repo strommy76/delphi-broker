@@ -58,10 +58,31 @@ class PeerDeliveryService:
             return SendResponse(message=None, error=sender_error)
         if sender is None:
             raise RuntimeError("participant resolution returned no participant and no error")
+        if sender.collaboration_governed:
+            return SendResponse(
+                message=None,
+                error=peer_error(
+                    "collaboration_required",
+                    "participant is governed for operator-mediated collaboration",
+                    {"participant_id": sender.participant_id},
+                ),
+            )
 
         recipients = self._resolve_recipients(request)
         if isinstance(recipients, SendResponse):
             return recipients
+        governed_recipients = [
+            recipient.participant_id for recipient in recipients if recipient.collaboration_governed
+        ]
+        if governed_recipients:
+            return SendResponse(
+                message=None,
+                error=peer_error(
+                    "collaboration_required",
+                    "recipient is governed for operator-mediated collaboration",
+                    {"participant_ids": governed_recipients},
+                ),
+            )
         if any(item.participant_id == sender.participant_id for item in recipients):
             # Atomic fail-loud fanout semantics: a self-recipient anywhere in
             # the recipient set rejects the entire send instead of silently
@@ -479,7 +500,10 @@ class PeerDeliveryService:
                     {"participant_id": participant.participant_id},
                 ),
             )
-        if resolved != participant:
+        if (
+            resolved.participant_type != participant.participant_type
+            or resolved.transport_type != participant.transport_type
+        ):
             return (
                 None,
                 peer_error(

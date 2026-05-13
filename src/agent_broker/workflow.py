@@ -124,11 +124,11 @@ def _other_agent_on_host(conn: sqlite3.Connection, host: str, current_agent: str
     workers = _workers_on_host(conn, host)
     if len(workers) != 2:
         raise ValueError(
-            f"host {host!r} must have exactly two workers, found {len(workers)}: " f"{workers!r}"
+            f"host {host!r} must have exactly two workers, found {len(workers)}: {workers!r}"
         )
     if current_agent not in workers:
         raise ValueError(
-            f"agent {current_agent!r} is not a worker on host {host!r} " f"(workers: {workers!r})"
+            f"agent {current_agent!r} is not a worker on host {host!r} (workers: {workers!r})"
         )
     return next(w for w in workers if w != current_agent)
 
@@ -258,8 +258,7 @@ def start_session(
         workers = _workers_on_host(conn, host)
         if len(workers) != 2:
             raise ValueError(
-                f"host {host!r} must have exactly two workers, found {len(workers)}: "
-                f"{workers!r}"
+                f"host {host!r} must have exactly two workers, found {len(workers)}: {workers!r}"
             )
         first_destination = workers[0]
         rnd = db.create_round(
@@ -417,8 +416,7 @@ def _spawn_round_3(conn: sqlite3.Connection, session: dict, *, source_output: st
     reviewers = _expected_reviewers_for_session(conn, session["id"])
     if not reviewers:
         raise ValueError(
-            f"session {session['id']!r} has no eligible reviewers — "
-            "all workers have been skipped"
+            f"session {session['id']!r} has no eligible reviewers — all workers have been skipped"
         )
     rnd = db.create_round(
         conn,
@@ -454,8 +452,7 @@ def on_review_emitted(
         raise ValueError(f"unknown round_id {round_id!r}")
     if rnd["round_type"] != "multi_agent_review":
         raise ValueError(
-            f"round {round_id!r} is round_type {rnd['round_type']!r}, "
-            "expected 'multi_agent_review'"
+            f"round {round_id!r} is round_type {rnd['round_type']!r}, expected 'multi_agent_review'"
         )
     session = db.get_session(conn, rnd["session_id"])
     if session is None:

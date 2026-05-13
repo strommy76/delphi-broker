@@ -1,0 +1,7 @@
+{% macro render_content(text, classes="card-body-full") -%}
+  <div class="{{ classes }} collab-content" data-collab-render>
+    <template data-collab-source>{{ text }}</template>
+    <div class="collab-rendered" data-collab-output hidden></div>
+    <pre class="collab-render-fallback" data-collab-fallback>{{ text }}</pre>
+  </div>
+{%- endmacro %}

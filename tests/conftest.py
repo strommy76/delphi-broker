@@ -64,6 +64,7 @@ def data_layer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Data
                         "role": "worker",
                         "participant_type": "agent",
                         "transport_type": "mcp",
+                        "collaboration_governed": True,
                         "is_probe": False,
                         "secret": "a" * 64,
                     },
@@ -73,6 +74,7 @@ def data_layer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Data
                         "role": "worker",
                         "participant_type": "agent",
                         "transport_type": "mcp",
+                        "collaboration_governed": True,
                         "is_probe": False,
                         "secret": "b" * 64,
                     },
@@ -82,6 +84,7 @@ def data_layer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Data
                         "role": "worker",
                         "participant_type": "agent",
                         "transport_type": "mcp",
+                        "collaboration_governed": True,
                         "is_probe": False,
                         "secret": "c" * 64,
                     },
@@ -91,6 +94,7 @@ def data_layer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Data
                         "role": "executor",
                         "participant_type": "agent",
                         "transport_type": "mcp",
+                        "collaboration_governed": True,
                         "is_probe": False,
                         "secret": "d" * 64,
                     },
@@ -100,6 +104,7 @@ def data_layer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Data
                         "role": "arbitrator",
                         "participant_type": "agent",
                         "transport_type": "mcp",
+                        "collaboration_governed": True,
                         "is_probe": False,
                         "secret": "e" * 64,
                     },
@@ -109,6 +114,7 @@ def data_layer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Data
                         "role": "operator",
                         "participant_type": "operator",
                         "transport_type": "http",
+                        "collaboration_governed": False,
                         "is_probe": False,
                         "secret": "g" * 64,
                     },
@@ -134,6 +140,7 @@ def data_layer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Data
         "DELPHI_MCP_ORIGIN_REGISTRY",
         "http://127.0.0.1:8420,http://localhost:8420",
     )
+    monkeypatch.setenv("DELPHI_ORIGINLESS_TRUSTED_INGRESS_CIDRS", "100.64.0.0/10")
     monkeypatch.setenv("DELPHI_WEB_SECURE", "false")
     monkeypatch.setenv("DELPHI_NUDGE_SWEEP_ENABLED", "false")
     monkeypatch.setenv("DELPHI_MCP_SESSION_MANAGER_ENABLED", "false")
@@ -226,6 +233,7 @@ def _write_full_agents(agents_path: Path) -> None:
                         "role": "worker",
                         "participant_type": "agent",
                         "transport_type": "mcp",
+                        "collaboration_governed": True,
                         "is_probe": False,
                         "secret": _AGENT_SECRETS_FIXTURE["prod-claude"],
                     },
@@ -235,6 +243,7 @@ def _write_full_agents(agents_path: Path) -> None:
                         "role": "worker",
                         "participant_type": "agent",
                         "transport_type": "mcp",
+                        "collaboration_governed": True,
                         "is_probe": False,
                         "secret": _AGENT_SECRETS_FIXTURE["prod-codex"],
                     },
@@ -244,6 +253,7 @@ def _write_full_agents(agents_path: Path) -> None:
                         "role": "worker",
                         "participant_type": "agent",
                         "transport_type": "mcp",
+                        "collaboration_governed": True,
                         "is_probe": False,
                         "secret": _AGENT_SECRETS_FIXTURE["dev-claude"],
                     },
@@ -253,6 +263,7 @@ def _write_full_agents(agents_path: Path) -> None:
                         "role": "worker",
                         "participant_type": "agent",
                         "transport_type": "mcp",
+                        "collaboration_governed": True,
                         "is_probe": False,
                         "secret": _AGENT_SECRETS_FIXTURE["dev-codex"],
                     },
@@ -262,6 +273,7 @@ def _write_full_agents(agents_path: Path) -> None:
                         "role": "arbitrator",
                         "participant_type": "agent",
                         "transport_type": "mcp",
+                        "collaboration_governed": True,
                         "is_probe": False,
                         "secret": _AGENT_SECRETS_FIXTURE["flow-claude"],
                     },
@@ -271,6 +283,7 @@ def _write_full_agents(agents_path: Path) -> None:
                         "role": "executor",
                         "participant_type": "agent",
                         "transport_type": "mcp",
+                        "collaboration_governed": True,
                         "is_probe": False,
                         "secret": _AGENT_SECRETS_FIXTURE["exec-codex"],
                     },
@@ -280,6 +293,7 @@ def _write_full_agents(agents_path: Path) -> None:
                         "role": "operator",
                         "participant_type": "operator",
                         "transport_type": "http",
+                        "collaboration_governed": False,
                         "is_probe": False,
                         "secret": _AGENT_SECRETS_FIXTURE["operator"],
                     },
@@ -289,6 +303,7 @@ def _write_full_agents(agents_path: Path) -> None:
                         "role": "worker",
                         "participant_type": "agent",
                         "transport_type": "mcp",
+                        "collaboration_governed": True,
                         "is_probe": True,
                         "secret": _AGENT_SECRETS_FIXTURE["prod-probe"],
                     },
@@ -298,6 +313,7 @@ def _write_full_agents(agents_path: Path) -> None:
                         "role": "worker",
                         "participant_type": "agent",
                         "transport_type": "http",
+                        "collaboration_governed": False,
                         "is_probe": True,
                         "secret": _AGENT_SECRETS_FIXTURE["pi-claude-probe"],
                     },
@@ -307,6 +323,7 @@ def _write_full_agents(agents_path: Path) -> None:
                         "role": "worker",
                         "participant_type": "agent",
                         "transport_type": "http",
+                        "collaboration_governed": False,
                         "is_probe": True,
                         "secret": _AGENT_SECRETS_FIXTURE["pi-codex-probe"],
                     },
@@ -341,6 +358,7 @@ def api_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Api
         "DELPHI_MCP_ORIGIN_REGISTRY",
         "http://127.0.0.1:8420,http://localhost:8420",
     )
+    monkeypatch.setenv("DELPHI_ORIGINLESS_TRUSTED_INGRESS_CIDRS", "100.64.0.0/10")
     monkeypatch.setenv("DELPHI_WEB_SECURE", "false")
     monkeypatch.setenv("DELPHI_NUDGE_SWEEP_ENABLED", "false")
     monkeypatch.setenv("DELPHI_MCP_SESSION_MANAGER_ENABLED", "false")

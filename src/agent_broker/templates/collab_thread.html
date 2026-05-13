@@ -1,0 +1,40 @@
+{% extends "collab_base.html" %}
+{% from "collab_content.html" import render_content %}
+{% block title %}Collaboration Thread{% endblock %}
+{% block content %}
+<section>
+  <p><a href="/web/collab/drafts" class="muted">&larr; Collaboration drafts</a></p>
+  <h1>Collaboration Thread</h1>
+  <p class="card-meta">{{ payload.thread_id }}</p>
+  {% for entry in payload.entries %}
+    <article class="card">
+      <div class="card-header">
+        <strong>{{ entry.entry_type }}</strong>
+      </div>
+      {% if entry.entry_type == "draft" %}
+        <p class="card-meta">
+          {{ entry.draft.created_ts }} · {{ entry.draft.correlation_id }}
+        </p>
+        {{ render_content(entry.draft.content_text) }}
+      {% elif entry.entry_type == "decision" %}
+        <p class="card-meta">
+          {{ entry.decision.decision_ts }} · {{ entry.decision.decision_type }}
+        </p>
+        {% if entry.decision.final_content_text %}
+          {{ render_content(entry.decision.final_content_text) }}
+        {% endif %}
+      {% elif entry.entry_type == "deliverable" %}
+        <p class="card-meta">
+          {{ entry.deliverable.created_ts }} · {{ entry.deliverable.correlation_id }}
+        </p>
+        {{ render_content(entry.deliverable.content_text) }}
+      {% elif entry.entry_type == "audit_event" %}
+        <p class="card-meta">
+          {{ entry.event.event_ts }} · {{ entry.event.event_kind }} · {{ entry.event.participant_id }}
+        </p>
+        <pre class="card-body-full">{{ entry.event.detail_json }}</pre>
+      {% endif %}
+    </article>
+  {% endfor %}
+</section>
+{% endblock %}

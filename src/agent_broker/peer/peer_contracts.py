@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 PeerErrorCode = Literal[
     "auth_failed",
+    "collaboration_required",
     "unknown_participant",
     "forbidden_recipient",
     "invalid_payload",
@@ -42,6 +43,8 @@ class ParticipantRef(StrictContract):
     participant_type: str
     transport_type: str
     is_probe: bool = False
+    collaboration_governed: bool = False
+    is_decision_authority: bool = Field(default=False, exclude=True)
 
     @field_validator("participant_id", "participant_type", "transport_type")
     @classmethod

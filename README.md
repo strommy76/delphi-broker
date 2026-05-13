@@ -2,8 +2,8 @@
 
 Agent Broker hosts agent communication workflows behind authenticated local
 services. The current surfaces are the Delphi consensus workflow, v3 task
-dispatch, and MCP/HTTP transport boundaries that will carry future peer-agent
-coordination without renaming the project again.
+dispatch, peer-to-peer messaging, and operator-mediated collaboration for
+participants whose messages require an explicit approval gate.
 
 The authoritative architecture spec is [`DESIGN.md`](./DESIGN.md). This README is operator-facing setup; `DESIGN.md` is the contract.
 
@@ -28,8 +28,8 @@ Failures (stalled rounds, off-script outputs, irreconcilable hosts, executor err
 
 - **FastAPI** application with three surfaces:
   - `/api/v1/` — REST API (operator-facing: create session, pending transition, nudge, abort, escalation, transcript, approve execution)
-  - `/mcp` — MCP server exposing four agent tools: `delphi_poll_inbox`, `delphi_emit_response`, `delphi_emit_review`, `delphi_executor_emit`
-  - `/web/` — Phone-friendly operator UI (session list, pending nudge, transcript, escalation resolution)
+  - `/mcp` — MCP server exposing Delphi, peer, and collaboration tools behind HMAC verification
+  - `/web/` — Phone-friendly operator UI (session list, pending nudge, transcript, escalation resolution, collaboration approvals)
 - **SQLite** (WAL mode) is the single source of truth. Schema: `sessions`, `rounds`, `iterations`, `reviews`, `agents`. The v1 `messages`/`message_receipts` tables are gone.
 - **Authentication.** Operator: shared `DELPHI_OPERATOR_TOKEN` (cookie-based session for web, header for REST). Agents: per-agent HMAC-SHA256 over canonical fields, with a 5-minute replay window on `client_ts`.
 - **Concurrency.** Round 1 runs in parallel across hosts but serially within a host; Round 3 runs in parallel across reviewers. See [`DESIGN.md` §10](./DESIGN.md#10-concurrency-model).
@@ -85,7 +85,7 @@ Agent registry lives in `config/agents.json` (copy from example):
 cp config/agents.json.example config/agents.json
 ```
 
-Each agent entry declares `agent_id`, `host`, and exactly one `role` from `worker | arbitrator | executor`. Per-agent HMAC secrets can be inlined (development) or kept in `config/agents-secrets.json` (production).
+Each agent entry declares `agent_id`, `host`, exactly one `role` from `worker | arbitrator | executor`, and an explicit `collaboration_governed` boolean. Per-agent HMAC secrets can be inlined (development) or kept in `config/agents-secrets.json` (production). Participants that must use operator-mediated collaboration set `collaboration_governed: true`; direct peer sends involving those participants are rejected and must use the collaboration lifecycle.
 
 ## Running
 
@@ -127,7 +127,7 @@ See [`BOOTSTRAP.md`](./BOOTSTRAP.md) for the full agent self-configuration flow.
 
 ## Agent Contract
 
-Agents interact with the broker through four MCP tools. All four require an `agent_id`, a fresh `client_ts` (ISO 8601, within 5 minutes of broker time), and an HMAC-SHA256 `signature` over the per-action canonical field set.
+Agents interact with the broker through HMAC-authenticated MCP tools. Every tool requires an `agent_id`, a fresh `client_ts` (ISO 8601, within 5 minutes of broker time), and an HMAC-SHA256 `signature` over the per-action canonical field set.
 
 | Tool | Caller | Purpose |
 |---|---|---|
@@ -135,6 +135,16 @@ Agents interact with the broker through four MCP tools. All four require an `age
 | `delphi_emit_response` | worker / arbitrator | Submits a structured response (`output` + `self_assessment` + `rationale`) for an open iteration. |
 | `delphi_emit_review` | round-3 reviewer (worker) | Submits `APPROVE` or `REJECT` with optional comments and rationale. |
 | `delphi_executor_emit` | executor | Reports the success/failure of executing the final approved prompt. |
+
+Operator-mediated collaboration uses a separate lifecycle so the approval gate
+is server-enforced rather than a UI convention:
+
+| Tool | Caller | Purpose |
+|---|---|---|
+| `collab_propose_message` | collaboration-governed agent | Creates a pending draft for operator review. |
+| `collab_poll` | collaboration-governed recipient | Returns approved, unacked deliverables addressed to the caller. |
+| `collab_ack` | collaboration-governed recipient | Acknowledges a delivered collaboration message. |
+| `collab_get_thread` | collaboration participant/operator | Returns the caller-visible thread projection. |
 
 Every worker, arbitrator, and reviewer response must conform to the structured JSON contract in [`DESIGN.md` §6](./DESIGN.md#6-agent-output-contract). Malformed responses cause the iteration to be marked `off_script` and pause the session for operator resolution.
 

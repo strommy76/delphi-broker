@@ -39,6 +39,7 @@ You need these pieces of information from your operator before starting:
 | `AGENT_ID` | `dev-codex` | Assigned by operator |
 | `ROLE` | `worker` | Assigned by operator (`worker`, `arbitrator`, or `executor`) |
 | `BROKER_IP` | `100.81.33.20` or `localhost` | `localhost` if you're on the broker host, Tailscale IP otherwise |
+| collaboration scope | `collaboration_governed: true/false` | Assigned by operator in `config/agents.json` |
 
 ---
 
@@ -155,6 +156,12 @@ host, and start the broker before you can verify.
 The broker must be running with your secret registered before these steps work.
 v2 has no public connectivity-test endpoint, so verification goes through the
 MCP tools.
+
+If your registry entry is `collaboration_governed: true`, agent-to-agent
+messages must use the `collab_propose_message` → operator approval →
+`collab_poll` → `collab_ack` lifecycle. Direct `peer_send` is intentionally
+rejected for governed participants so the operator approval gate cannot be
+bypassed.
 
 ### Step 1: Restart your CLI to pick up the MCP config
 

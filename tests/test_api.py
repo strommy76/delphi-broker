@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 # ---------------------------------------------------------------------------
 # 1. Create session: valid token -> 201 with session_id
@@ -66,21 +67,46 @@ def test_foreign_origin_rejected_by_app_middleware(client):
     assert resp.json()["error"] == "origin_rejected"
 
 
+def test_operator_web_allows_missing_origin_from_configured_trusted_ingress(api_harness):
+    with TestClient(api_harness.app, client=("100.80.8.34", 53000)) as mesh_client:
+        resp = mesh_client.get(
+            "/web/",
+            headers={"X-Operator-Token": "test-operator-token"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert "Agent Broker" in resp.text
+
+
+def test_operator_web_rejects_missing_origin_from_untrusted_ingress(api_harness):
+    with TestClient(api_harness.app, client=("192.0.2.44", 53000)) as mesh_client:
+        resp = mesh_client.get(
+            "/web/",
+            headers={"X-Operator-Token": "test-operator-token"},
+        )
+
+    assert resp.status_code == 403
+    assert resp.json() == {
+        "error": "origin_rejected",
+        "reason": "missing Origin is allowed only on loopback or configured trusted ingress",
+    }
+
+
 def test_phase_3_config_registers_pi_codex():
     root = Path(__file__).resolve().parents[1]
-    agents = json.loads((root / "config" / "agents.json").read_text())["agents"]
+    agents = json.loads((root / "config" / "agents.json").read_text(encoding="utf-8"))["agents"]
     pi_codex = [agent for agent in agents if agent["agent_id"] == "pi-codex"]
-    assert pi_codex == [
-        {
-            "agent_id": "pi-codex",
-            "host": "pi",
-            "role": "worker",
-            "participant_type": "agent",
-            "transport_type": "mcp",
-            "is_probe": False,
-        }
-    ]
-    assert "config/agents-secrets.json" in (root / ".gitignore").read_text()
+    assert len(pi_codex) == 1
+    assert {
+        "agent_id": "pi-codex",
+        "host": "pi",
+        "role": "worker",
+        "participant_type": "agent",
+        "transport_type": "mcp",
+        "is_probe": False,
+        "collaboration_governed": False,
+    }.items() <= pi_codex[0].items()
+    assert "config/agents-secrets.json" in (root / ".gitignore").read_text(encoding="utf-8")
 
 
 def test_operator_hidden_threads_config_is_gitignored_with_example():
@@ -97,11 +123,308 @@ def test_operator_hidden_threads_config_is_gitignored_with_example():
 
 def test_template_brand_and_task_dispatch_titles_are_split():
     templates = Path(__file__).resolve().parents[1] / "src" / "agent_broker" / "templates"
-    assert '<span class="nav-brand">Agent Broker</span>' in (templates / "base.html").read_text()
-    assert "Tasks — Task Dispatch" in (templates / "v3_tasks_list.html").read_text()
-    assert "New task — Task Dispatch" in (templates / "v3_task_new.html").read_text()
-    assert "{{ task.title }} — Task Dispatch" in (templates / "v3_task_view.html").read_text()
-    assert "Sessions — Delphi" in (templates / "sessions_list.html").read_text()
+    assert '<span class="nav-brand">Agent Broker</span>' in (templates / "base.html").read_text(
+        encoding="utf-8"
+    )
+    assert "Tasks — Task Dispatch" in (templates / "v3_tasks_list.html").read_text(encoding="utf-8")
+    assert "New task — Task Dispatch" in (templates / "v3_task_new.html").read_text(
+        encoding="utf-8"
+    )
+    assert "{{ task.title }} — Task Dispatch" in (templates / "v3_task_view.html").read_text(
+        encoding="utf-8"
+    )
+    assert "Sessions — Delphi" in (templates / "sessions_list.html").read_text(encoding="utf-8")
+
+
+def test_authenticated_operator_can_open_collaboration_drafts_page(api_harness, operator_token):
+    with TestClient(api_harness.app) as browser:
+        browser.headers.update(api_harness.client.headers)
+        browser.cookies.set("op_token", operator_token)
+        response = browser.get("/web/collab/drafts")
+
+    assert response.status_code == 200, response.text
+    assert "Collaboration Drafts" in response.text
+    assert "No pending collaboration drafts." in response.text
+
+
+def test_authenticated_operator_can_open_collaboration_thread_page(api_harness, operator_token):
+    from agent_broker.collaboration.collab_contracts import ProposeMessageRequest
+    from agent_broker.collaboration.services import COLLABORATION_SERVICE, IDENTITY_SERVICE
+
+    with TestClient(api_harness.app) as browser:
+        browser.headers.update(api_harness.client.headers)
+        browser.cookies.set("op_token", operator_token)
+        sender = IDENTITY_SERVICE.resolve("dev-codex")
+        recipient = IDENTITY_SERVICE.resolve("prod-codex")
+        assert sender is not None
+        assert recipient is not None
+        conn = api_harness.database.get_connection(api_harness.config.DB_PATH)
+        try:
+            proposed = COLLABORATION_SERVICE.propose(
+                conn,
+                ProposeMessageRequest(
+                    from_participant=sender,
+                    to_participants=(recipient,),
+                    message_kind="text",
+                    payload_json={"body": "operator thread render"},
+                    content_text="operator thread render",
+                    correlation_id="corr-web-thread-render",
+                    thread_id=None,
+                    subject="operator web regression",
+                ),
+            )
+        finally:
+            conn.close()
+        assert proposed.error is None
+        assert proposed.draft is not None
+
+        response = browser.get(f"/web/collab/threads/{proposed.draft.thread_id}")
+
+    assert response.status_code == 200, response.text
+    assert "Collaboration Thread" in response.text
+    assert "corr-web-thread-render" in response.text
+
+
+def test_operator_message_api_uses_operator_token_not_agent_hmac(api_harness, operator_token):
+    body = {
+        "to_participants": ["prod-codex"],
+        "message_kind": "text",
+        "payload_json": {"body": "operator api"},
+        "content_text": "operator api",
+        "correlation_id": "corr-operator-api",
+        "subject": "operator api",
+    }
+    with TestClient(api_harness.app) as browser:
+        browser.headers.update({"Origin": "http://127.0.0.1:8420"})
+        unauthenticated = browser.post(
+            "/api/v1/collab/operator-message",
+            headers={"X-Agent-Id": "dev-codex", "X-Signature": "not-operator-auth"},
+            json=body,
+        )
+        assert unauthenticated.status_code == 401, unauthenticated.text
+
+        authenticated = browser.post(
+            "/api/v1/collab/operator-message",
+            headers={"X-Operator-Token": operator_token},
+            json=body,
+        )
+
+    assert authenticated.status_code == 200, authenticated.text
+    payload = authenticated.json()
+    assert payload["error"] is None
+    assert payload["draft"]["from_participant"]["participant_id"] == "operator"
+    assert payload["decision"]["decision_type"] == "operator_initiated"
+    assert payload["deliverable"]["content_text"] == "operator api"
+
+
+def test_operator_message_api_rejects_unknown_recipient(api_harness, operator_token):
+    with TestClient(api_harness.app) as browser:
+        browser.headers.update({"Origin": "http://127.0.0.1:8420"})
+        response = browser.post(
+            "/api/v1/collab/operator-message",
+            headers={"X-Operator-Token": operator_token},
+            json={
+                "to_participants": ["missing-agent"],
+                "message_kind": "text",
+                "payload_json": {"body": "operator api"},
+                "content_text": "operator api",
+                "correlation_id": "corr-operator-missing",
+                "subject": "operator api",
+            },
+        )
+
+    assert response.status_code == 400, response.text
+    assert "unknown participant" in response.text
+
+
+def test_authenticated_operator_can_open_collaboration_compose_page(api_harness, operator_token):
+    with TestClient(api_harness.app) as browser:
+        browser.headers.update(api_harness.client.headers)
+        browser.cookies.set("op_token", operator_token)
+        response = browser.get("/web/collab/compose")
+
+    assert response.status_code == 200, response.text
+    assert "Compose Collaboration Message" in response.text
+    assert "prod-codex" in response.text
+    assert "data-collab-preview-source" in response.text
+
+
+def test_authenticated_operator_can_submit_collaboration_compose_form(api_harness, operator_token):
+    with TestClient(api_harness.app) as browser:
+        browser.headers.update(api_harness.client.headers)
+        browser.cookies.set("op_token", operator_token)
+        response = browser.post(
+            "/web/collab/compose",
+            data={
+                "to_participants": "prod-codex",
+                "message_kind": "text",
+                "payload_json": '{"body":"compose"}',
+                "content_text": "compose message",
+                "correlation_id": "corr-compose-form",
+                "subject": "compose form",
+                "thread_id": "",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303, response.text
+    assert response.headers["location"].startswith("/web/collab/threads/")
+
+
+def test_operator_compose_form_rejects_missing_origin_or_referer(
+    api_harness,
+    operator_token,
+):
+    with TestClient(api_harness.app, client=("127.0.0.1", 53000)) as browser:
+        browser.cookies.set("op_token", operator_token)
+        response = browser.post(
+            "/web/collab/compose",
+            data={
+                "to_participants": "prod-codex",
+                "message_kind": "text",
+                "payload_json": '{"body":"compose"}',
+                "content_text": "compose message",
+                "correlation_id": "corr-compose-missing-origin",
+                "subject": "compose csrf",
+                "thread_id": "",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"] == "operator web POST requires Origin or Referer"
+
+
+def test_operator_compose_form_accepts_registered_referer_without_origin(
+    api_harness,
+    operator_token,
+):
+    with TestClient(api_harness.app, client=("127.0.0.1", 53000)) as browser:
+        browser.cookies.set("op_token", operator_token)
+        response = browser.post(
+            "/web/collab/compose",
+            headers={"Referer": "http://127.0.0.1:8420/web/collab/compose"},
+            data={
+                "to_participants": "prod-codex",
+                "message_kind": "text",
+                "payload_json": '{"body":"compose"}',
+                "content_text": "compose message",
+                "correlation_id": "corr-compose-referer-origin",
+                "subject": "compose csrf",
+                "thread_id": "",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303, response.text
+    assert response.headers["location"].startswith("/web/collab/threads/")
+
+
+def test_operator_draft_action_rejects_missing_origin_or_referer(
+    api_harness,
+    operator_token,
+):
+    from agent_broker.collaboration.collab_contracts import ProposeMessageRequest
+    from agent_broker.collaboration.services import COLLABORATION_SERVICE, IDENTITY_SERVICE
+
+    sender = IDENTITY_SERVICE.resolve("dev-codex")
+    recipient = IDENTITY_SERVICE.resolve("prod-codex")
+    assert sender is not None
+    assert recipient is not None
+
+    with TestClient(api_harness.app, client=("127.0.0.1", 53000)) as browser:
+        browser.cookies.set("op_token", operator_token)
+        conn = api_harness.database.get_connection(api_harness.config.DB_PATH)
+        try:
+            proposed = COLLABORATION_SERVICE.propose(
+                conn,
+                ProposeMessageRequest(
+                    from_participant=sender,
+                    to_participants=(recipient,),
+                    message_kind="text",
+                    payload_json={"body": "approve csrf"},
+                    content_text="approve csrf",
+                    correlation_id="corr-approve-missing-origin",
+                    thread_id=None,
+                    subject="approve csrf",
+                ),
+            )
+        finally:
+            conn.close()
+        assert proposed.error is None
+        assert proposed.draft is not None
+        response = browser.post(
+            f"/web/collab/drafts/{proposed.draft.draft_id}/approve",
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"] == "operator web POST requires Origin or Referer"
+
+
+def test_operator_compose_form_can_send_to_existing_thread_without_subject(
+    api_harness, operator_token
+):
+    with TestClient(api_harness.app) as browser:
+        browser.headers.update(api_harness.client.headers)
+        browser.cookies.set("op_token", operator_token)
+        created = browser.post(
+            "/web/collab/compose",
+            data={
+                "to_participants": "prod-codex",
+                "message_kind": "text",
+                "payload_json": '{"body":"first"}',
+                "content_text": "first message",
+                "correlation_id": "corr-compose-existing-first",
+                "subject": "compose existing thread",
+                "thread_id": "",
+            },
+            follow_redirects=False,
+        )
+        assert created.status_code == 303, created.text
+        thread_id = created.headers["location"].rsplit("/", 1)[-1]
+
+        response = browser.post(
+            "/web/collab/compose",
+            data={
+                "to_participants": "prod-codex",
+                "message_kind": "text",
+                "payload_json": '{"body":"second"}',
+                "content_text": "second message",
+                "correlation_id": "corr-compose-existing-second",
+                "subject": "",
+                "thread_id": thread_id,
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303, response.text
+    assert response.headers["location"] == f"/web/collab/threads/{thread_id}"
+
+
+def test_collaboration_templates_use_safe_client_content_renderer():
+    root = Path(__file__).resolve().parents[1]
+    collab_base = (root / "src" / "agent_broker" / "templates" / "collab_base.html").read_text(
+        encoding="utf-8"
+    )
+    renderer = (root / "src" / "agent_broker" / "static" / "collab_render.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "marked@12.0.2/marked.min.js" in collab_base
+    assert "dompurify@3.1.6/dist/purify.min.js" in collab_base
+    assert "@highlightjs/cdn-assets@11.9.0/highlight.min.js" in collab_base
+    assert "@highlightjs/cdn-assets@11.9.0/styles/github-dark.min.css" in collab_base
+    assert "sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi" in collab_base
+    assert "sha384-+VfUPEb0PdtChMwmBcBmykRMDd+v6D/oFmB3rZM/puCMDYcIvF968OimRh4KQY9a" in collab_base
+    assert "sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp" in collab_base
+    assert "sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH" in collab_base
+    assert 'crossorigin="anonymous"' in collab_base
+    assert "DOMPurify.sanitize" in renderer
+    assert "source instanceof HTMLTemplateElement" in renderer
+    assert "source.content.textContent" in renderer
+    assert "output.innerHTML = rendered" in renderer
+    assert "DOMPurify.sanitize(html)" in renderer
 
 
 def test_v3_operator_rosters_exclude_probe_and_operator_identities(

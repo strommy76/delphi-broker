@@ -95,6 +95,12 @@ def _call_mcp_tool(
     )
 
 
+def _mcp_tool_payload(response) -> dict:
+    payload = _sse_payload(response)
+    text = payload["result"]["content"][0]["text"]
+    return json.loads(text)
+
+
 def _mcp_http_stack(tmp_path, monkeypatch):
     agents_path = tmp_path / "agents.json"
     _write_full_agents(agents_path)
@@ -114,6 +120,7 @@ def _mcp_http_stack(tmp_path, monkeypatch):
         "DELPHI_MCP_ORIGIN_REGISTRY",
         "http://127.0.0.1:8420,http://localhost:8420",
     )
+    monkeypatch.setenv("DELPHI_ORIGINLESS_TRUSTED_INGRESS_CIDRS", "100.64.0.0/10")
     monkeypatch.setenv("DELPHI_WEB_SECURE", "false")
     monkeypatch.setenv("DELPHI_NUDGE_SWEEP_ENABLED", "false")
     monkeypatch.setenv("DELPHI_MCP_SESSION_MANAGER_ENABLED", "true")
@@ -135,6 +142,7 @@ def _write_peer_agents(agents_path):
                         "participant_type": "agent",
                         "transport_type": "mcp",
                         "is_probe": False,
+                        "collaboration_governed": False,
                         "secret": "p" * 64,
                     },
                     {
@@ -144,6 +152,7 @@ def _write_peer_agents(agents_path):
                         "participant_type": "agent",
                         "transport_type": "mcp",
                         "is_probe": False,
+                        "collaboration_governed": False,
                         "secret": "q" * 64,
                     },
                     {
@@ -153,6 +162,7 @@ def _write_peer_agents(agents_path):
                         "participant_type": "agent",
                         "transport_type": "mcp",
                         "is_probe": False,
+                        "collaboration_governed": False,
                         "secret": "f" * 64,
                     },
                     {
@@ -162,6 +172,7 @@ def _write_peer_agents(agents_path):
                         "participant_type": "operator",
                         "transport_type": "http",
                         "is_probe": False,
+                        "collaboration_governed": False,
                         "secret": "g" * 64,
                     },
                     {
@@ -171,6 +182,7 @@ def _write_peer_agents(agents_path):
                         "participant_type": "agent",
                         "transport_type": "http",
                         "is_probe": True,
+                        "collaboration_governed": False,
                         "secret": "h" * 64,
                     },
                     {
@@ -180,6 +192,7 @@ def _write_peer_agents(agents_path):
                         "participant_type": "agent",
                         "transport_type": "http",
                         "is_probe": True,
+                        "collaboration_governed": False,
                         "secret": "i" * 64,
                     },
                 ]
@@ -208,6 +221,7 @@ def _mcp_peer_http_stack(tmp_path, monkeypatch):
         "DELPHI_MCP_ORIGIN_REGISTRY",
         "http://127.0.0.1:8420,http://localhost:8420",
     )
+    monkeypatch.setenv("DELPHI_ORIGINLESS_TRUSTED_INGRESS_CIDRS", "100.64.0.0/10")
     monkeypatch.setenv("DELPHI_WEB_SECURE", "false")
     monkeypatch.setenv("DELPHI_NUDGE_SWEEP_ENABLED", "false")
     monkeypatch.setenv("DELPHI_MCP_SESSION_MANAGER_ENABLED", "true")
@@ -304,6 +318,42 @@ def test_registered_mcp_tools_are_hmac_gated(api_harness):
         required = set(tool.parameters.get("required", []))
         assert {"agent_id", "client_ts", "signature"}.issubset(required), name
         assert "_verify(" in inspect.getsource(tool.fn), name
+
+
+def test_mcp_tools_list_exposes_collaboration_tools_to_client(tmp_path, monkeypatch):
+    _, _, _, _, main = _mcp_http_stack(tmp_path, monkeypatch)
+    with TestClient(main.app) as client:
+        headers = _initialize_mcp_session(client)
+        response = client.post(
+            "/mcp",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": {},
+            },
+        )
+    assert response.status_code == 200, response.text
+    payload = _sse_payload(response)
+    tools_by_name = {tool["name"]: tool for tool in payload["result"]["tools"]}
+    assert {
+        "collab_propose_message",
+        "collab_poll",
+        "collab_ack",
+        "collab_get_thread",
+    }.issubset(tools_by_name)
+    propose_description = tools_by_name["collab_propose_message"]["description"]
+    for canonical_field in (
+        "<correlation_id>",
+        "<to_participants_json>",
+        "<message_kind>",
+        "<payload_json>",
+        "<content_text>",
+        "<thread_id_or_empty>",
+        "<subject_or_empty>",
+    ):
+        assert canonical_field in propose_description
 
 
 def test_mcp_http_path_rejects_foreign_host(tmp_path, monkeypatch):
@@ -587,6 +637,44 @@ def test_all_registered_mcp_tools_reject_bogus_hmac_behaviorally(tmp_path, monke
             "signature": "bogus",
             "thread_id": "00000000-0000-0000-0000-000000000009",
         },
+        "collab_propose_message": {
+            "agent_id": "dev-codex",
+            "participant_type": "agent",
+            "transport_type": "mcp",
+            "client_ts": ts,
+            "signature": "bogus",
+            "to_participants": ["prod-codex"],
+            "message_kind": "text",
+            "payload_json": {"body": "x"},
+            "content_text": "x",
+            "correlation_id": "corr-collab-bogus",
+            "thread_id": None,
+            "subject": "test",
+        },
+        "collab_poll": {
+            "agent_id": "prod-codex",
+            "participant_type": "agent",
+            "transport_type": "mcp",
+            "client_ts": ts,
+            "signature": "bogus",
+            "limit": 10,
+        },
+        "collab_ack": {
+            "agent_id": "prod-codex",
+            "participant_type": "agent",
+            "transport_type": "mcp",
+            "client_ts": ts,
+            "signature": "bogus",
+            "deliverable_id": "00000000-0000-0000-0000-000000000010",
+        },
+        "collab_get_thread": {
+            "agent_id": "prod-codex",
+            "participant_type": "agent",
+            "transport_type": "mcp",
+            "client_ts": ts,
+            "signature": "bogus",
+            "thread_id": "00000000-0000-0000-0000-000000000011",
+        },
     }
     registered = set(mcp_server.mcp._tool_manager._tools)
     assert registered == set(tool_arguments)
@@ -605,6 +693,287 @@ def test_all_registered_mcp_tools_reject_bogus_hmac_behaviorally(tmp_path, monke
             payload = _sse_payload(response)
             text = payload["result"]["content"][0]["text"]
             assert json.loads(text)["error"] == "auth_failed", tool_name
+
+
+def test_mcp_collaboration_round_trip_requires_operator_approval_and_recipient_ack(
+    tmp_path, monkeypatch
+):
+    config, database, _, _, main = _mcp_http_stack(tmp_path, monkeypatch)
+    conn = database.get_connection(config.DB_PATH)
+    try:
+        database.init_db(conn)
+    finally:
+        conn.close()
+
+    with TestClient(main.app) as client:
+        headers = _initialize_mcp_session(client)
+        propose_ts = _now()
+        propose_sig = database.compute_signature(
+            "d" * 64,
+            *database.build_collab_propose_signature_fields(
+                agent_id="dev-codex",
+                participant_type="agent",
+                transport_type="mcp",
+                timestamp=propose_ts,
+                correlation_id="corr-collab-round-trip",
+                to_participants=["prod-codex"],
+                message_kind="text",
+                payload_json={"body": "draft"},
+                content_text="draft",
+                thread_id=None,
+                subject="collaboration test",
+            ),
+        )
+        proposed_response = _call_mcp_tool(
+            client,
+            headers,
+            request_id=70,
+            name="collab_propose_message",
+            arguments={
+                "agent_id": "dev-codex",
+                "participant_type": "agent",
+                "transport_type": "mcp",
+                "client_ts": propose_ts,
+                "signature": propose_sig,
+                "to_participants": ["prod-codex"],
+                "message_kind": "text",
+                "payload_json": {"body": "draft"},
+                "content_text": "draft",
+                "correlation_id": "corr-collab-round-trip",
+                "thread_id": None,
+                "subject": "collaboration test",
+            },
+        )
+        proposed = _mcp_tool_payload(proposed_response)
+        assert proposed["error"] is None
+        draft_id = proposed["draft"]["draft_id"]
+        thread_id = proposed["draft"]["thread_id"]
+
+        operator_thread_response = client.get(
+            f"/api/v1/collab/threads/{thread_id}",
+            headers={
+                "Origin": "http://127.0.0.1:8420",
+                "X-Operator-Token": "test-operator-token",
+            },
+        )
+        assert operator_thread_response.status_code == 200, operator_thread_response.text
+        operator_thread = operator_thread_response.json()
+        assert operator_thread["thread_id"] == thread_id
+        assert [
+            entry["draft"]["draft_id"]
+            for entry in operator_thread["entries"]
+            if entry["entry_type"] == "draft"
+        ] == [draft_id]
+
+        pre_poll_ts = _now()
+        pre_poll_sig = database.compute_signature(
+            "b" * 64,
+            *database.build_collab_poll_signature_fields(
+                agent_id="prod-codex",
+                participant_type="agent",
+                transport_type="mcp",
+                timestamp=pre_poll_ts,
+                limit=10,
+            ),
+        )
+        pre_poll_response = _call_mcp_tool(
+            client,
+            headers,
+            request_id=71,
+            name="collab_poll",
+            arguments={
+                "agent_id": "prod-codex",
+                "participant_type": "agent",
+                "transport_type": "mcp",
+                "client_ts": pre_poll_ts,
+                "signature": pre_poll_sig,
+                "limit": 10,
+            },
+        )
+        assert _mcp_tool_payload(pre_poll_response)["deliverables"] == []
+
+        approve_response = client.post(
+            f"/api/v1/collab/drafts/{draft_id}/approve",
+            headers={
+                "Origin": "http://127.0.0.1:8420",
+                "X-Operator-Token": "test-operator-token",
+            },
+            json={},
+        )
+        assert approve_response.status_code == 200, approve_response.text
+
+        post_poll_ts = _now()
+        post_poll_sig = database.compute_signature(
+            "b" * 64,
+            *database.build_collab_poll_signature_fields(
+                agent_id="prod-codex",
+                participant_type="agent",
+                transport_type="mcp",
+                timestamp=post_poll_ts,
+                limit=10,
+            ),
+        )
+        post_poll_response = _call_mcp_tool(
+            client,
+            headers,
+            request_id=72,
+            name="collab_poll",
+            arguments={
+                "agent_id": "prod-codex",
+                "participant_type": "agent",
+                "transport_type": "mcp",
+                "client_ts": post_poll_ts,
+                "signature": post_poll_sig,
+                "limit": 10,
+            },
+        )
+        deliverables = _mcp_tool_payload(post_poll_response)["deliverables"]
+        assert len(deliverables) == 1
+        deliverable_id = deliverables[0]["deliverable_id"]
+
+        foreign_ack_ts = _now()
+        foreign_ack_sig = database.compute_signature(
+            "e" * 64,
+            *database.build_collab_ack_signature_fields(
+                agent_id="flow-claude",
+                participant_type="agent",
+                transport_type="mcp",
+                timestamp=foreign_ack_ts,
+                deliverable_id=deliverable_id,
+            ),
+        )
+        foreign_ack_response = _call_mcp_tool(
+            client,
+            headers,
+            request_id=73,
+            name="collab_ack",
+            arguments={
+                "agent_id": "flow-claude",
+                "participant_type": "agent",
+                "transport_type": "mcp",
+                "client_ts": foreign_ack_ts,
+                "signature": foreign_ack_sig,
+                "deliverable_id": deliverable_id,
+            },
+        )
+        assert _mcp_tool_payload(foreign_ack_response)["error"]["error"] == "forbidden_recipient"
+
+        ack_ts = _now()
+        ack_sig = database.compute_signature(
+            "b" * 64,
+            *database.build_collab_ack_signature_fields(
+                agent_id="prod-codex",
+                participant_type="agent",
+                transport_type="mcp",
+                timestamp=ack_ts,
+                deliverable_id=deliverable_id,
+            ),
+        )
+        ack_response = _call_mcp_tool(
+            client,
+            headers,
+            request_id=74,
+            name="collab_ack",
+            arguments={
+                "agent_id": "prod-codex",
+                "participant_type": "agent",
+                "transport_type": "mcp",
+                "client_ts": ack_ts,
+                "signature": ack_sig,
+                "deliverable_id": deliverable_id,
+            },
+        )
+        assert _mcp_tool_payload(ack_response)["error"] is None
+
+
+def test_mcp_collab_propose_signature_covers_message_content(tmp_path, monkeypatch):
+    config, database, _, _, main = _mcp_http_stack(tmp_path, monkeypatch)
+    conn = database.get_connection(config.DB_PATH)
+    try:
+        database.init_db(conn)
+    finally:
+        conn.close()
+
+    with TestClient(main.app) as client:
+        headers = _initialize_mcp_session(client)
+        propose_ts = _now()
+        signature = database.compute_signature(
+            "d" * 64,
+            *database.build_collab_propose_signature_fields(
+                agent_id="dev-codex",
+                participant_type="agent",
+                transport_type="mcp",
+                timestamp=propose_ts,
+                correlation_id="corr-collab-tamper",
+                to_participants=["prod-codex"],
+                message_kind="text",
+                payload_json={"body": "signed"},
+                content_text="signed",
+                thread_id=None,
+                subject="collaboration test",
+            ),
+        )
+        response = _call_mcp_tool(
+            client,
+            headers,
+            request_id=75,
+            name="collab_propose_message",
+            arguments={
+                "agent_id": "dev-codex",
+                "participant_type": "agent",
+                "transport_type": "mcp",
+                "client_ts": propose_ts,
+                "signature": signature,
+                "to_participants": ["prod-codex"],
+                "message_kind": "text",
+                "payload_json": {"body": "tampered"},
+                "content_text": "tampered",
+                "correlation_id": "corr-collab-tamper",
+                "thread_id": None,
+                "subject": "collaboration test",
+            },
+        )
+        assert _mcp_tool_payload(response)["error"] == "auth_failed"
+
+
+def test_mcp_peer_send_blocks_collaboration_governed_sender_to_direct_peer(tmp_path, monkeypatch):
+    config, database, _, _, main = _mcp_http_stack(tmp_path, monkeypatch)
+    with TestClient(main.app) as client:
+        headers = _initialize_mcp_session(client)
+        send_ts = _now()
+        send_sig = database.compute_signature(
+            "d" * 64,
+            "peer_send",
+            "dev-codex",
+            "agent",
+            "mcp",
+            send_ts,
+            "corr-governed-bypass",
+        )
+        send_response = _call_mcp_tool(
+            client,
+            headers,
+            request_id=75,
+            name="peer_send",
+            arguments={
+                "agent_id": "dev-codex",
+                "participant_type": "agent",
+                "transport_type": "mcp",
+                "client_ts": send_ts,
+                "signature": send_sig,
+                "to_participants": ["pi-codex-probe"],
+                "message_kind": "text",
+                "payload_json": {"body": "bypass"},
+                "content_text": "bypass",
+                "correlation_id": "corr-governed-bypass",
+                "parent_message_id": None,
+                "thread_id": None,
+                "subject": "bypass",
+            },
+        )
+    payload = _mcp_tool_payload(send_response)
+    assert payload["message"] is None
+    assert payload["error"]["error"] == "collaboration_required"
 
 
 def test_mcp_peer_send_poll_ack_round_trip(tmp_path, monkeypatch):

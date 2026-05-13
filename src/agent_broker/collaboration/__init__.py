@@ -1,0 +1,1 @@
+"""Operator-mediated collaboration domain."""

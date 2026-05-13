@@ -296,13 +296,15 @@ def get_thread(conn: sqlite3.Connection, thread_id: str) -> dict[str, Any] | Non
 
 
 def list_threads(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    return _rows(conn.execute("""SELECT t.*,
+    return _rows(
+        conn.execute("""SELECT t.*,
                       COUNT(m.message_id) AS message_count,
                       COALESCE(MAX(m.sent_ts), t.created_ts) AS last_activity_ts
                  FROM peer_threads t
             LEFT JOIN peer_messages m ON m.thread_id = t.thread_id
              GROUP BY t.thread_id
-             ORDER BY last_activity_ts DESC, t.thread_id ASC"""))
+             ORDER BY last_activity_ts DESC, t.thread_id ASC""")
+    )
 
 
 def insert_message(

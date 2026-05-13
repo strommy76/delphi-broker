@@ -327,7 +327,7 @@ def delphi_executor_emit(
     try:
         if agent_id != EXECUTOR_AGENT_ID:
             return _auth_failed(
-                f"agent {agent_id!r} is not the configured executor " f"({EXECUTOR_AGENT_ID!r})"
+                f"agent {agent_id!r} is not the configured executor ({EXECUTOR_AGENT_ID!r})"
             )
         err = _verify(
             conn,
@@ -350,7 +350,7 @@ def delphi_executor_emit(
             return _auth_failed(f"unknown iteration {request_id!r}")
         if iteration["destination_agent"] != agent_id:
             return _auth_failed(
-                f"agent {agent_id!r} is not the destination for iteration " f"{request_id!r}"
+                f"agent {agent_id!r} is not the destination for iteration {request_id!r}"
             )
         db.touch_agent(conn, agent_id)
         try:
@@ -374,9 +374,11 @@ def delphi_executor_emit(
 # decoupled from module-level state.
 from .v3.mcp_tools import register_v3_tools  # noqa: E402
 from .peer.peer_mcp_tools import register_peer_tools  # noqa: E402
+from .collaboration.collab_mcp_tools import register_collab_tools  # noqa: E402
 
 register_v3_tools(mcp, _verify, _conn, AGENT_SECRETS)
 register_peer_tools(mcp, _verify, _conn, AGENT_SECRETS)
+register_collab_tools(mcp, _verify, _conn, AGENT_SECRETS)
 
 
 # Re-exported for tests: sentinel constants the test suite asserts against.

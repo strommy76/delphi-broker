@@ -39,8 +39,12 @@ from .config import (
     MCP_ORIGIN_REGISTRY,
     MCP_SESSION_MANAGER_ENABLED,
     NUDGE_SWEEP_ENABLED,
+    ORIGINLESS_TRUSTED_INGRESS_CIDRS,
     PORT,
 )
+from .collaboration import collab_store
+from .collaboration.collab_api import router as collab_api_router
+from .collaboration.collab_web import router as collab_web_router
 from .mcp_server import mcp
 from .peer import peer_store
 from .peer.peer_api import router as peer_api_router
@@ -88,6 +92,7 @@ async def lifespan(application: FastAPI):
     db.init_db(conn)
     v3db.init_v3_schema(conn)
     peer_store.init_peer_schema(conn)
+    collab_store.init_collab_schema(conn)
     conn.close()
     # Start the FastMCP session manager when MCP transport is enabled.
     # Direct unit tests call tool functions without the stream manager.
@@ -112,6 +117,7 @@ async def lifespan(application: FastAPI):
 app = FastAPI(title="Agent Broker", version="0.2.0", lifespan=lifespan)
 _transport_policy = TransportPolicy(
     origin_registry=MCP_ORIGIN_REGISTRY,
+    originless_trusted_ingress_cidrs=ORIGINLESS_TRUSTED_INGRESS_CIDRS,
 )
 
 
@@ -142,6 +148,8 @@ app.include_router(api_router)
 app.include_router(web_router)
 app.include_router(peer_api_router)
 app.include_router(peer_web_router)
+app.include_router(collab_api_router)
+app.include_router(collab_web_router)
 app.include_router(v3_api_router)  # /api/v2/* — v3 task lifecycle
 app.include_router(v3_web_router)  # /web/v3/* — operator UI for v3 tasks
 

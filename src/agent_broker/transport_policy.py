@@ -22,29 +22,56 @@ class TransportPolicy:
     """Deterministic HTTP ingress policy.
 
     `origin_registry` is loaded from environment config. Missing Origin is
-    accepted only for loopback clients so native CLI MCP clients can operate
-    without browser headers.
+    accepted only for trusted ingress classes where the client address itself
+    proves the private boundary: loopback clients and operator-declared CIDR
+    ranges.
     """
 
     origin_registry: tuple[str, ...]
+    originless_trusted_ingress_cidrs: tuple[
+        ipaddress.IPv4Network | ipaddress.IPv6Network,
+        ...,
+    ]
 
 
-def _is_loopback_host(value: str | None) -> bool:
+def _parse_ip_host(value: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     if value is None or not value.strip():
-        return False
+        return None
     host = value.strip()
     if host.startswith("[") and "]" in host:
         host = host[1 : host.index("]")]
     try:
-        return ipaddress.ip_address(host).is_loopback
+        return ipaddress.ip_address(host)
     except ValueError:
         pass
     if host.count(":") == 1:
         host = host.rsplit(":", 1)[0]
     try:
-        return ipaddress.ip_address(host).is_loopback
+        return ipaddress.ip_address(host)
     except ValueError:
-        return host == "localhost"
+        return None
+
+
+def _is_loopback_host(value: str | None) -> bool:
+    parsed = _parse_ip_host(value)
+    if parsed is not None:
+        return parsed.is_loopback
+    if value is None:
+        return False
+    host = value.strip()
+    if host.count(":") == 1:
+        host = host.rsplit(":", 1)[0]
+    return host == "localhost"
+
+
+def _is_trusted_originless_ingress_host(
+    value: str | None,
+    trusted_cidrs: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...],
+) -> bool:
+    parsed = _parse_ip_host(value)
+    if parsed is None:
+        return False
+    return any(parsed in network for network in trusted_cidrs)
 
 
 def validate_origin(
@@ -55,9 +82,12 @@ def validate_origin(
 ) -> tuple[bool, str | None]:
     """Return `(allowed, reason)` for an HTTP request origin boundary."""
     if origin is None or not origin.strip():
-        if _is_loopback_host(client_host):
+        if _is_loopback_host(client_host) or _is_trusted_originless_ingress_host(
+            client_host,
+            policy.originless_trusted_ingress_cidrs,
+        ):
             return True, None
-        return False, "missing Origin is allowed only on loopback ingress"
+        return False, "missing Origin is allowed only on loopback or configured trusted ingress"
 
     parsed = urlparse(origin.strip())
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
