@@ -45,6 +45,9 @@
 
   const sourceText = (container) => {
     const source = container.querySelector("[data-collab-source]");
+    if (source instanceof HTMLTemplateElement) {
+      return source.content.textContent || "";
+    }
     return source ? source.textContent || "" : "";
   };
 

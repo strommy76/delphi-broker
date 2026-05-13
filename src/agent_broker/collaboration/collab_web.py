@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import secrets
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Cookie, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .. import database as db
-from ..config import DB_PATH, OPERATOR_PARTICIPANT_ID, require_operator_token
+from ..config import DB_PATH, MCP_ORIGIN_REGISTRY, OPERATOR_PARTICIPANT_ID, require_operator_token
 from ..peer.peer_contracts import ParticipantRef
 from ..routes.web import OP_TOKEN_COOKIE, templates
 from .collab_contracts import (
@@ -31,6 +32,36 @@ def _require_web_operator(op_token: str | None) -> None:
     if not op_token or not secrets.compare_digest(op_token, expected):
         raise HTTPException(
             status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/web/login"}
+        )
+
+
+def _require_registered_web_post_origin(request: Request) -> None:
+    origin = request.headers.get("origin")
+    if origin:
+        _require_registered_origin(origin, header_name="Origin")
+        return
+    referer = request.headers.get("referer")
+    if referer:
+        _require_registered_origin(referer, header_name="Referer")
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="operator web POST requires Origin or Referer",
+    )
+
+
+def _require_registered_origin(value: str, *, header_name: str) -> None:
+    parsed = urlparse(value.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"{header_name} must be an absolute http(s) URL",
+        )
+    normalized = f"{parsed.scheme}://{parsed.netloc}"
+    if normalized not in MCP_ORIGIN_REGISTRY:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"{header_name} origin is not registered for this broker",
         )
 
 
@@ -104,6 +135,7 @@ def submit_operator_message(
     op_token: str | None = Cookie(default=None, alias=OP_TOKEN_COOKIE),
 ):
     _require_web_operator(op_token)
+    _require_registered_web_post_origin(request)
     try:
         payload = json.loads(payload_json)
         if not isinstance(payload, dict):
@@ -182,10 +214,12 @@ def submit_operator_message(
 
 @router.post("/drafts/{draft_id}/approve")
 def approve_draft(
+    request: Request,
     draft_id: str,
     op_token: str | None = Cookie(default=None, alias=OP_TOKEN_COOKIE),
 ):
     _require_web_operator(op_token)
+    _require_registered_web_post_origin(request)
     _decide(
         OperatorDecisionRequest(
             operator_participant=_operator_ref(),
@@ -202,11 +236,13 @@ def approve_draft(
 
 @router.post("/drafts/{draft_id}/edit_approve")
 def edit_approve_draft(
+    request: Request,
     draft_id: str,
     content_text: str = Form(...),
     op_token: str | None = Cookie(default=None, alias=OP_TOKEN_COOKIE),
 ):
     _require_web_operator(op_token)
+    _require_registered_web_post_origin(request)
     _decide(
         OperatorDecisionRequest(
             operator_participant=_operator_ref(),
@@ -223,11 +259,13 @@ def edit_approve_draft(
 
 @router.post("/drafts/{draft_id}/reject")
 def reject_draft(
+    request: Request,
     draft_id: str,
     reason: str = Form(default=""),
     op_token: str | None = Cookie(default=None, alias=OP_TOKEN_COOKIE),
 ):
     _require_web_operator(op_token)
+    _require_registered_web_post_origin(request)
     _decide(
         OperatorDecisionRequest(
             operator_participant=_operator_ref(),
@@ -244,11 +282,13 @@ def reject_draft(
 
 @router.post("/drafts/{draft_id}/redirect_approve")
 def redirect_approve_draft(
+    request: Request,
     draft_id: str,
     to_participants: str = Form(...),
     op_token: str | None = Cookie(default=None, alias=OP_TOKEN_COOKIE),
 ):
     _require_web_operator(op_token)
+    _require_registered_web_post_origin(request)
     recipients = []
     for participant_id in [item.strip() for item in to_participants.split(",") if item.strip()]:
         participant = IDENTITY_SERVICE.resolve(participant_id)

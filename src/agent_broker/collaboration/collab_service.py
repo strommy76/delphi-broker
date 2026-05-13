@@ -21,6 +21,8 @@ from .collab_contracts import (
     CollabGetThreadResponse,
     CollabPollRequest,
     CollabPollResponse,
+    OPERATOR_INITIATED_DECISION_TYPE,
+    OPERATOR_INITIATED_EVENT_KIND,
     OperatorDecisionRequest,
     OperatorDecisionResponse,
     OperatorMessageRequest,
@@ -337,7 +339,10 @@ class CollaborationService:
                 )
             decision = collab_store.get_decision_for_draft(conn, existing["draft_id"])
             deliverable = None
-            if decision is not None and decision["decision_type"] == "operator_initiated":
+            if (
+                decision is not None
+                and decision["decision_type"] == OPERATOR_INITIATED_DECISION_TYPE
+            ):
                 deliverable = collab_store.get_deliverable_for_decision(
                     conn, decision["decision_id"]
                 )
@@ -405,7 +410,7 @@ class CollaborationService:
                 "decision_id": decision_id,
                 "draft_id": draft_id,
                 "operator_participant": operator.participant_id,
-                "decision_type": "operator_initiated",
+                "decision_type": OPERATOR_INITIATED_DECISION_TYPE,
                 "final_payload_json": request.payload_json,
                 "final_content_text": request.content_text,
                 "reason": None,
@@ -461,7 +466,7 @@ class CollaborationService:
                 "decision_id": decision_id,
                 "deliverable_id": None,
                 "participant_id": operator.participant_id,
-                "event_kind": "operator_initiated_message",
+                "event_kind": OPERATOR_INITIATED_EVENT_KIND,
                 "event_ts": created_ts,
                 "detail_json": {"recipient_count": len(recipients)},
             },
@@ -812,6 +817,9 @@ class CollaborationService:
                     {"thread_id": request.thread_id},
                 ),
             )
+        # Operator-authored messages are already gated by decision authority;
+        # unlike agent-authored drafts, the operator can address any
+        # collaboration thread without being a prior thread participant.
         return thread_id, None, None
 
     def _draft_matches_request(
@@ -863,7 +871,7 @@ class CollaborationService:
         draft_recipients = self._participants_from_rows(
             collab_store.list_draft_recipients(conn, draft["draft_id"])
         )
-        if request.decision_type == "operator_initiated":
+        if request.decision_type == OPERATOR_INITIATED_DECISION_TYPE:
             return {}, collab_error(
                 "invalid_payload",
                 "operator_initiated decisions must use the operator message seam",
@@ -1217,6 +1225,7 @@ class CollaborationService:
                 "operator_approve": 3,
                 "operator_edit_and_approve": 3,
                 "operator_redirect_and_approve": 3,
+                OPERATOR_INITIATED_EVENT_KIND: 3,
                 "operator_reject": 3,
                 "deliverable_created": 5,
                 "deliverable_polled": 6,

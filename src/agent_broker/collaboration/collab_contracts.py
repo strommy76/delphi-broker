@@ -34,6 +34,8 @@ DecisionType = Literal[
     "reject",
     "operator_initiated",
 ]
+OPERATOR_INITIATED_DECISION_TYPE: DecisionType = "operator_initiated"
+OPERATOR_INITIATED_EVENT_KIND = "operator_initiated_message"
 
 
 class StrictContract(BaseModel):

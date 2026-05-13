@@ -283,6 +283,11 @@ BEGIN
     END;
     SELECT CASE
         WHEN NOT EXISTS (
+            -- Payload equality is intentionally TEXT-level here. Canonical
+            -- writers must use _json_dump for decision and deliverable payload
+            -- JSON so a non-canonical serializer fails loud instead of
+            -- smuggling a semantically equivalent but non-authoritative form
+            -- across the delivery boundary.
             SELECT 1
               FROM collab_operator_decisions d
               JOIN collab_drafts draft ON draft.draft_id = d.draft_id

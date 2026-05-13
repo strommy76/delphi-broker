@@ -271,6 +271,97 @@ def test_authenticated_operator_can_submit_collaboration_compose_form(api_harnes
     assert response.headers["location"].startswith("/web/collab/threads/")
 
 
+def test_operator_compose_form_rejects_missing_origin_or_referer(
+    api_harness,
+    operator_token,
+):
+    with TestClient(api_harness.app, client=("127.0.0.1", 53000)) as browser:
+        browser.cookies.set("op_token", operator_token)
+        response = browser.post(
+            "/web/collab/compose",
+            data={
+                "to_participants": "prod-codex",
+                "message_kind": "text",
+                "payload_json": '{"body":"compose"}',
+                "content_text": "compose message",
+                "correlation_id": "corr-compose-missing-origin",
+                "subject": "compose csrf",
+                "thread_id": "",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"] == "operator web POST requires Origin or Referer"
+
+
+def test_operator_compose_form_accepts_registered_referer_without_origin(
+    api_harness,
+    operator_token,
+):
+    with TestClient(api_harness.app, client=("127.0.0.1", 53000)) as browser:
+        browser.cookies.set("op_token", operator_token)
+        response = browser.post(
+            "/web/collab/compose",
+            headers={"Referer": "http://127.0.0.1:8420/web/collab/compose"},
+            data={
+                "to_participants": "prod-codex",
+                "message_kind": "text",
+                "payload_json": '{"body":"compose"}',
+                "content_text": "compose message",
+                "correlation_id": "corr-compose-referer-origin",
+                "subject": "compose csrf",
+                "thread_id": "",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303, response.text
+    assert response.headers["location"].startswith("/web/collab/threads/")
+
+
+def test_operator_draft_action_rejects_missing_origin_or_referer(
+    api_harness,
+    operator_token,
+):
+    from agent_broker.collaboration.collab_contracts import ProposeMessageRequest
+    from agent_broker.collaboration.services import COLLABORATION_SERVICE, IDENTITY_SERVICE
+
+    sender = IDENTITY_SERVICE.resolve("dev-codex")
+    recipient = IDENTITY_SERVICE.resolve("prod-codex")
+    assert sender is not None
+    assert recipient is not None
+
+    with TestClient(api_harness.app, client=("127.0.0.1", 53000)) as browser:
+        browser.cookies.set("op_token", operator_token)
+        conn = api_harness.database.get_connection(api_harness.config.DB_PATH)
+        try:
+            proposed = COLLABORATION_SERVICE.propose(
+                conn,
+                ProposeMessageRequest(
+                    from_participant=sender,
+                    to_participants=(recipient,),
+                    message_kind="text",
+                    payload_json={"body": "approve csrf"},
+                    content_text="approve csrf",
+                    correlation_id="corr-approve-missing-origin",
+                    thread_id=None,
+                    subject="approve csrf",
+                ),
+            )
+        finally:
+            conn.close()
+        assert proposed.error is None
+        assert proposed.draft is not None
+        response = browser.post(
+            f"/web/collab/drafts/{proposed.draft.draft_id}/approve",
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"] == "operator web POST requires Origin or Referer"
+
+
 def test_operator_compose_form_can_send_to_existing_thread_without_subject(
     api_harness, operator_token
 ):
@@ -320,10 +411,18 @@ def test_collaboration_templates_use_safe_client_content_renderer():
         encoding="utf-8"
     )
 
-    assert "marked.min.js" in collab_base
-    assert "purify.min.js" in collab_base
-    assert "highlight.min.js" in collab_base
+    assert "marked@12.0.2/marked.min.js" in collab_base
+    assert "dompurify@3.1.6/dist/purify.min.js" in collab_base
+    assert "@highlightjs/cdn-assets@11.9.0/highlight.min.js" in collab_base
+    assert "@highlightjs/cdn-assets@11.9.0/styles/github-dark.min.css" in collab_base
+    assert "sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi" in collab_base
+    assert "sha384-+VfUPEb0PdtChMwmBcBmykRMDd+v6D/oFmB3rZM/puCMDYcIvF968OimRh4KQY9a" in collab_base
+    assert "sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp" in collab_base
+    assert "sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH" in collab_base
+    assert 'crossorigin="anonymous"' in collab_base
     assert "DOMPurify.sanitize" in renderer
+    assert "source instanceof HTMLTemplateElement" in renderer
+    assert "source.content.textContent" in renderer
     assert "output.innerHTML = rendered" in renderer
     assert "DOMPurify.sanitize(html)" in renderer
 
