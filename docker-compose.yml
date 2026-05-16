@@ -11,8 +11,6 @@ services:
     ports:
       # Pi-local agents (pi-claude, pi-codex) reach broker via localhost.
       - "127.0.0.1:${DELPHI_PORT}:8420"
-      # Cross-host Tailscale peers (bsflow-claude, etc.) reach broker via Pi Tailscale IP.
-      - "${BROKER_TAILSCALE_IP}:${DELPHI_PORT}:8420"
     volumes:
       - ./data:/app/data
       - ./config:/app/config:ro

@@ -63,10 +63,9 @@ Rule precedence:
 - Agent self-identification is mandatory on every MCP call.
 
 ### Configuration SSOT
-- `.env` — infrastructure config (operator token, host, port, db path, role overrides, web cookie security).
-- `config/agents.json` — public agent manifest (`agent_id`, `host`, `role`).
-- `config/agents-secrets.json` — gitignored sidecar for per-agent HMAC secrets in production.
-- `src/agent_broker/config.py` — single import point; loads from all of the above.
+- `.env` — infrastructure config, operator token, role overrides, web cookie security, and per-agent HMAC secrets.
+- `config/agents.json` — public agent manifest (`agent_id`, `host`, `role`, participant metadata).
+- `src/agent_broker/config.py` — single import point; loads from the above.
 
 ### API Surface
 - REST API at `/api/v1/session/*` — operator-facing session lifecycle.
@@ -130,7 +129,7 @@ The broker never advances past a pause without operator input. See `DESIGN.md` �
 - Refactor unrelated code for "cleanup"
 - Silence errors to make tests pass
 - Add heuristics, whitelists, or regex routing
-- Modify `.env`, `config/agents.json`, or `config/agents-secrets.json` without explicit instruction
+- Modify `.env` or `config/agents.json` without explicit instruction
 - Push to remote without explicit instruction
 - Reintroduce v1 surfaces (message lifecycle, approval routing, HTTP Basic auth, deprecated MCP tools)
 

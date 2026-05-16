@@ -40,20 +40,21 @@ Infrastructure config lives in `.env` (copy from `.env.example`):
 
 ```
 # Required
-DELPHI_OPERATOR_TOKEN=change-me-to-a-random-string
+DELPHI_OPERATOR_TOKEN=GENERATE_WITH_token_hex_32
 
 # Network
-DELPHI_HOST=127.0.0.1
+DELPHI_HOST=0.0.0.0
 DELPHI_PORT=8420
 DELPHI_MCP_HOST_REGISTRY=127.0.0.1:*,localhost:*
 DELPHI_MCP_ORIGIN_REGISTRY=http://127.0.0.1:8420,http://localhost:8420
 
 # Storage
-DELPHI_DB_PATH=delphi.db
+DELPHI_DB_PATH=data/delphi.db
 
 # Agent identity
 DELPHI_AGENTS_PATH=config/agents.json
-DELPHI_AGENT_SECRETS_PATH=config/agents-secrets.json
+OPERATOR_PERMANENTLY_HIDDEN_THREADS_PATH=config/operator_permanently_hidden_threads.json.example
+OPERATOR_PARTICIPANT_ID=operator
 DELPHI_ARBITRATOR_AGENT_ID=flow-claude
 DELPHI_EXECUTOR_AGENT_ID=dev-codex-executor
 
@@ -65,38 +66,35 @@ DELPHI_MCP_SESSION_MANAGER_ENABLED=true
 
 | Variable | Required | Unset behavior | Notes |
 |---|---|---|---|
-| `DELPHI_OPERATOR_TOKEN` | yes | fail loud on protected web/API use | Generate with `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `DELPHI_OPERATOR_TOKEN` | yes | fail loud on protected web/API use | Generate with `python -c "import secrets; print(secrets.token_hex(32))"`; placeholders are rejected |
 | `DELPHI_HOST` | yes | fail loud at startup/import | Localhost mode uses `127.0.0.1` |
 | `DELPHI_PORT` | yes | fail loud at startup/import | |
 | `DELPHI_MCP_HOST_REGISTRY` | yes | fail loud at startup/import | Deployment host-header registry for MCP transport security |
 | `DELPHI_MCP_ORIGIN_REGISTRY` | yes | fail loud at startup/import | Deployment Origin registry for HTTP ingress |
 | `DELPHI_DB_PATH` | yes | fail loud at startup/import | Resolved relative to project root unless absolute |
 | `DELPHI_AGENTS_PATH` | yes | fail loud at startup/import | Public agent manifest (committed) |
-| `DELPHI_AGENT_SECRETS_PATH` | yes | fail loud at startup/import | Sidecar path for production secrets |
+| `OPERATOR_PERMANENTLY_HIDDEN_THREADS_PATH` | yes | fail loud at startup/import | Relative path to operator-managed hidden-thread config; the committed example is an empty seed |
+| `OPERATOR_PARTICIPANT_ID` | yes | fail loud at startup/import | Must exist in `config/agents.json` |
 | `DELPHI_ARBITRATOR_AGENT_ID` | yes | fail loud at startup/import | Must exist with `role='arbitrator'` |
 | `DELPHI_EXECUTOR_AGENT_ID` | yes | fail loud at startup/import | Must exist with `role='executor'` (cannot also be a worker — see `DESIGN.md` §2) |
 | `DELPHI_WEB_SECURE` | yes | fail loud at startup/import | `true`/`1`/`yes` flags the operator session cookie `Secure` |
 | `DELPHI_NUDGE_SWEEP_ENABLED` | yes | fail loud at startup/import | Enables the background expired-nudge sweep |
 | `DELPHI_MCP_SESSION_MANAGER_ENABLED` | yes | fail loud at startup/import | Enables the FastMCP stream session manager for HTTP MCP transport |
 
-Agent registry lives in `config/agents.json` (copy from example):
-
-```bash
-cp config/agents.json.example config/agents.json
-```
-
-Each agent entry declares `agent_id`, `host`, exactly one `role` from `worker | arbitrator | executor`, and an explicit `collaboration_governed` boolean. Per-agent HMAC secrets can be inlined (development) or kept in `config/agents-secrets.json` (production). Participants that must use operator-mediated collaboration set `collaboration_governed: true`; direct peer sends involving those participants are rejected and must use the collaboration lifecycle.
+Agent registry lives in committed `config/agents.json`. Each agent entry declares `agent_id`, `host`, exactly one `role` from `worker | arbitrator | executor | operator`, participant metadata, and an explicit `collaboration_governed` boolean. Per-agent HMAC secrets live in `.env` as `DELPHI_AGENT_SECRET_<NORMALIZED_AGENT_ID>`. Participants that must use operator-mediated collaboration set `collaboration_governed: true`; direct peer sends involving those participants are rejected and must use the collaboration lifecycle.
 
 ## Running
 
 ### Docker (production)
 
 ```bash
-cp .env.example .env  # fill in DELPHI_OPERATOR_TOKEN
+cp .env.example .env  # generate DELPHI_OPERATOR_TOKEN and DELPHI_AGENT_SECRET_* values
 docker compose -p agent-broker up -d --build
 ```
 
 > The `-p agent-broker` flag isolates this stack from other compose projects on the same host.
+> To expose the broker on a private-network interface, set `BROKER_TAILSCALE_IP`
+> in `.env` and run with `-f docker-compose.yml -f docker-compose.tailscale.yml`.
 
 Data persists in `./data/` (SQLite DB). Agent registry is mounted read-only from `./config/`.
 
@@ -104,7 +102,7 @@ Data persists in `./data/` (SQLite DB). Agent registry is mounted read-only from
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env  # fill in DELPHI_OPERATOR_TOKEN
+cp .env.example .env  # generate DELPHI_OPERATOR_TOKEN and DELPHI_AGENT_SECRET_* values
 PYTHONPATH=src python -m agent_broker.main
 ```
 
@@ -156,9 +154,10 @@ agent-broker/
   DESIGN.md             # Authoritative architecture contract (v2)
   Dockerfile            # Container image
   docker-compose.yml    # Production deployment
+  docker-compose.tailscale.yml # Optional private-network port binding
   config/
-    agents.json.example
-    agents-secrets.json.example
+    agents.json
+    operator_permanently_hidden_threads.json.example
   src/agent_broker/
     config.py           # Configuration loader (single import point)
     database.py         # SQLite layer + signature helpers

@@ -106,17 +106,27 @@ def test_phase_3_config_registers_pi_codex():
         "is_probe": False,
         "collaboration_governed": False,
     }.items() <= pi_codex[0].items()
-    assert "config/agents-secrets.json" in (root / ".gitignore").read_text(encoding="utf-8")
+    assert "config/agents-secrets.json" not in (root / ".env.example").read_text(
+        encoding="utf-8"
+    )
+    assert "config/agents-secrets.json" not in (root / ".gitignore").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_operator_hidden_threads_config_is_gitignored_with_example():
     root = Path(__file__).resolve().parents[1]
     gitignore = (root / ".gitignore").read_text()
+    env_example = (root / ".env.example").read_text()
     example = json.loads(
         (root / "config" / "operator_permanently_hidden_threads.json.example").read_text()
     )
 
     assert "config/operator_permanently_hidden_threads.json" in gitignore
+    assert (
+        "OPERATOR_PERMANENTLY_HIDDEN_THREADS_PATH="
+        "config/operator_permanently_hidden_threads.json.example"
+    ) in env_example
     assert example["thread_ids"] == []
     assert example["_meta"]["changelog"]
 
