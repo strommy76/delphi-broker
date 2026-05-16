@@ -5,6 +5,7 @@ PATH:        ~/projects/agent-broker/src/agent_broker/config.py
 DESCRIPTION: Fail-loud configuration loader for broker runtime, MCP transport, and agent registry settings.
 
 CHANGELOG:
+2026-05-16 13:15      Claude     [Hardening] Reject GENERATE_WITH_ placeholder values from DELPHI_AGENT_SECRET_* env vars at startup (prevents .env-copied-unchanged silent-broken deployment).
 2026-05-16 12:20      Claude     [Refactor] Move per-agent HMAC secrets from inline/sidecar JSON to .env per the env-SSOT doctrine. agents.json carries structural fields only; secrets come from DELPHI_AGENT_SECRET_<NORMALIZED_AGENT_ID>. Inline `secret` retained as back-compat for test fixtures.
 2026-05-06 14:00      Codex      [Refactor] Rename operator permanently hidden thread path env-var for semantic consistency.
 2026-05-06 13:37      Codex      [Refactor] Rename operator hidden-thread constant for permanent read-side exclusion semantics.
@@ -264,9 +265,18 @@ def _agent_secret_env_var(agent_id: str) -> str:
 
 for _agent in SEED_AGENTS:
     _agent_id = _agent["agent_id"]
-    _env_secret = os.environ.get(_agent_secret_env_var(_agent_id), "").strip()
-    if _env_secret:
-        AGENT_SECRETS[_agent_id] = _env_secret
+    _env_var_name = _agent_secret_env_var(_agent_id)
+    _env_secret = os.environ.get(_env_var_name, "").strip()
+    if not _env_secret:
+        continue
+    if _env_secret.startswith("GENERATE_WITH_"):
+        raise ValueError(
+            f"Agent '{_agent_id}' has placeholder secret in {_env_var_name}. "
+            "It looks like .env was copied from .env.example without generating "
+            "real secrets. Replace every DELPHI_AGENT_SECRET_* value with a "
+            'fresh hex secret: python -c "import secrets; print(secrets.token_hex(32))"'
+        )
+    AGENT_SECRETS[_agent_id] = _env_secret
 
 # Final validation: every seed agent must have a usable secret somewhere.
 for _agent in SEED_AGENTS:

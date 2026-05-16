@@ -1,14 +1,50 @@
 {
-  "$schema": "Seed agent registry. Agents listed here are auto-registered on startup. Per-agent HMAC secrets are sourced from .env (DELPHI_AGENT_SECRET_<NORMALIZED_AGENT_ID>), not from this file.",
+  "$schema": "Seed agent registry. Agents listed here are auto-registered on startup. Per-agent HMAC secrets are sourced from .env via DELPHI_AGENT_SECRET_<NORMALIZED_AGENT_ID> (uppercase, `-` → `_`). Naming patterns: `<base>` = primary identity; `<base>-peer` = peer-direct sibling (collaboration_governed=false) for terminal-approved-then-direct-peer workflows; `<base>-<role>` = role-specific separate identity (e.g., dev-codex-executor for executor role, distinct from dev-codex worker). Separate identities per use case; do not conflate paradigms.",
   "agents": [
     {
-      "agent_id": "dev-codex",
+      "agent_id": "operator",
+      "host": "pi",
+      "role": "operator",
+      "participant_type": "operator",
+      "transport_type": "http",
+      "is_probe": false,
+      "collaboration_governed": false
+    },
+    {
+      "agent_id": "flow-claude",
+      "host": "bsflow",
+      "role": "arbitrator",
+      "participant_type": "agent",
+      "transport_type": "mcp",
+      "is_probe": false,
+      "collaboration_governed": true
+    },
+    {
+      "agent_id": "dev-codex-executor",
       "host": "desktop-vc94kou",
       "role": "executor",
       "participant_type": "agent",
       "transport_type": "mcp",
       "is_probe": false,
       "collaboration_governed": true
+    },
+    {
+      "agent_id": "dev-codex",
+      "host": "desktop-vc94kou",
+      "role": "worker",
+      "participant_type": "agent",
+      "transport_type": "mcp",
+      "is_probe": false,
+      "collaboration_governed": true
+    },
+    {
+      "agent_id": "dev-codex-peer",
+      "host": "desktop-vc94kou",
+      "role": "worker",
+      "participant_type": "agent",
+      "transport_type": "mcp",
+      "is_probe": false,
+      "collaboration_governed": false
     },
     {
       "agent_id": "dev-claude",
@@ -20,6 +56,15 @@
       "collaboration_governed": true
     },
     {
+      "agent_id": "dev-claude-peer",
+      "host": "desktop-vc94kou",
+      "role": "worker",
+      "participant_type": "agent",
+      "transport_type": "mcp",
+      "is_probe": false,
+      "collaboration_governed": false
+    },
+    {
       "agent_id": "prod-codex",
       "host": "bsalien",
       "role": "worker",
@@ -27,6 +72,15 @@
       "transport_type": "mcp",
       "is_probe": false,
       "collaboration_governed": true
+    },
+    {
+      "agent_id": "prod-codex-peer",
+      "host": "bsalien",
+      "role": "worker",
+      "participant_type": "agent",
+      "transport_type": "mcp",
+      "is_probe": false,
+      "collaboration_governed": false
     },
     {
       "agent_id": "prod-claude",
@@ -38,9 +92,27 @@
       "collaboration_governed": true
     },
     {
+      "agent_id": "prod-claude-peer",
+      "host": "bsalien",
+      "role": "worker",
+      "participant_type": "agent",
+      "transport_type": "mcp",
+      "is_probe": false,
+      "collaboration_governed": false
+    },
+    {
       "agent_id": "bsflow-claude",
       "host": "bsflow",
-      "role": "arbitrator",
+      "role": "worker",
+      "participant_type": "agent",
+      "transport_type": "mcp",
+      "is_probe": false,
+      "collaboration_governed": false
+    },
+    {
+      "agent_id": "pi-claude",
+      "host": "pi",
+      "role": "worker",
       "participant_type": "agent",
       "transport_type": "mcp",
       "is_probe": false,
