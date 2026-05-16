@@ -1,20 +1,19 @@
 name: agent-broker
 
+# All environment configuration lives in .env (single SSOT).
+# Compose only references primitives the compose stage itself needs (ports, volumes).
+# No inline defaults, no hardcoded literals, no `environment:` block.
 services:
   broker:
     build: .
     container_name: agent-broker
     env_file: .env
     ports:
+      # Pi-local agents (pi-claude, pi-codex) reach broker via localhost.
       - "127.0.0.1:${DELPHI_PORT}:8420"
+      # Cross-host Tailscale peers (bsflow-claude, etc.) reach broker via Pi Tailscale IP.
+      - "${BROKER_TAILSCALE_IP}:${DELPHI_PORT}:8420"
     volumes:
       - ./data:/app/data
       - ./config:/app/config:ro
-    environment:
-      - DELPHI_HOST=0.0.0.0
-      - DELPHI_DB_PATH=/app/data/delphi.db
-      - DELPHI_MCP_HOST_REGISTRY=127.0.0.1:*,localhost:*
-      - DELPHI_MCP_ORIGIN_REGISTRY=http://127.0.0.1:${DELPHI_PORT},http://localhost:${DELPHI_PORT}
-      - DELPHI_NUDGE_SWEEP_ENABLED=true
-      - DELPHI_MCP_SESSION_MANAGER_ENABLED=true
     restart: always

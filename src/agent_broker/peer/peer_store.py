@@ -5,6 +5,7 @@ PATH:        ~/projects/agent-broker/src/agent_broker/peer/peer_store.py
 DESCRIPTION: SQLite schema migration and persistence API for immutable peer messages, receipts, and audit events.
 
 CHANGELOG:
+2026-05-16 10:42      pi-claude  [Fix] Add poll_messages_batched: single-transaction batch delivery + audit rows. Reduces poll-loop write-lock acquisitions from N to 1.
 2026-05-06 13:29      Codex      [Fix] Retire startup trigger drops and make peer_store the canonical audit-event seam.
 2026-05-06 13:13      Codex      [Refactor] Keep poll receipt updates atomic without per-message receipt SELECTs.
 2026-05-06 12:58      Codex      [Refactor] Remove probe cleanup mutation helper and add batched event/thread reads for operator segregation.
@@ -736,6 +737,58 @@ def poll_one_message(
     if message is None:
         raise RuntimeError("atomic peer poll committed but message was not found")
     return message
+
+
+def poll_messages_batched(
+    conn: sqlite3.Connection,
+    *,
+    recipient_participant: str,
+    message_ids: Sequence[str],
+    delivered_ts: str,
+    event_specs: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Atomically mark a batch of messages delivered and record poll audit events in one transaction.
+
+    Replaces the per-message poll_one_message loop to reduce SQLite write-lock acquisitions
+    from N to 1 per peer_poll call, eliminating the contention-induced hang at scale.
+    """
+    if not message_ids:
+        return []
+    if len(message_ids) != len(event_specs):
+        raise ValueError("message_ids and event_specs must align")
+    try:
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        placeholders = ",".join("?" for _ in message_ids)
+        cursor = conn.execute(
+            f"""UPDATE peer_receipts
+                  SET delivered_ts = COALESCE(delivered_ts, ?)
+                WHERE recipient_participant = ?
+                  AND message_id IN ({placeholders})""",
+            (delivered_ts, recipient_participant, *message_ids),
+        )
+        if cursor.rowcount != len(message_ids):
+            raise ValueError(
+                f"receipt batch update affected {cursor.rowcount} rows; expected {len(message_ids)}"
+            )
+        # Insert events through _insert_event_no_commit (one call per event) inside the
+        # single BEGIN IMMEDIATE window. Preserves the audit-fault rollback contract and
+        # the monkeypatch seam used in test_peer_services. Still 1 write lock per poll
+        # (not 1 per message) because all inserts execute within this transaction.
+        for ev in event_specs:
+            _insert_event_no_commit(conn, **ev)
+    except Exception:
+        conn.rollback()
+        raise
+    else:
+        conn.commit()
+    messages: list[dict[str, Any]] = []
+    for message_id in message_ids:
+        message = get_message(conn, message_id)
+        if message is None:
+            raise RuntimeError("atomic peer poll committed but message was not found")
+        messages.append(message)
+    return messages
 
 
 def ack_message(

@@ -5,6 +5,7 @@ PATH:        ~/projects/agent-broker/src/agent_broker/mcp_server.py
 DESCRIPTION: HMAC-authenticated MCP tool registration for Delphi v2 and v3 agent surfaces.
 
 CHANGELOG:
+2026-05-16 11:02      pi-claude  [Fix] Enable stateless_http=True on FastMCP. Broker becomes restart-resilient — no per-session in-memory state, so existing wrappers don't break when broker container recreates.
 2026-05-06 13:54      Codex      [Fix] Exclude probe identities from Delphi reviewer eligibility.
 2026-05-06 09:55      Codex      [Feature] Register Phase 6 peer messaging MCP tools.
 2026-05-06 08:30      Codex      [Refactor] Rename package to agent_broker and harden fail-loud Phase 1 broker boundaries.
@@ -52,6 +53,7 @@ from .config import (
 
 mcp = FastMCP(
     "agent-broker",
+    stateless_http=True,
     transport_security=TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=list(MCP_HOST_REGISTRY),

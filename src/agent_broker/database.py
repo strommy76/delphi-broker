@@ -5,6 +5,7 @@ PATH:        ~/projects/agent-broker/src/agent_broker/database.py
 DESCRIPTION: SQLite data layer for Delphi v2 session, round, iteration, review, and agent state.
 
 CHANGELOG:
+2026-05-16 10:40      pi-claude  [Fix] Add PRAGMA busy_timeout=5000 to get_connection to prevent immediate lock-fail under poll-loop contention.
 2026-05-06 14:21      Codex      [Fix] Upsert config-seeded agent registry rows so config remains canonical.
 2026-05-06 14:04      Codex      [Fix] Rebuild the agents registry table with FK enforcement paused only for the migration window.
 2026-05-06 14:00      Codex      [Fix] Make the agents registry shape migration restart-safe after failed attempts.
@@ -217,6 +218,7 @@ def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
     path_key = str(path)
     if path_key not in _initialized:
         init_db(conn)

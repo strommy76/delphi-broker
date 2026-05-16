@@ -70,8 +70,11 @@ def _initialize_mcp_session(client: TestClient) -> dict[str, str]:
         },
     )
     assert response.status_code == 200, response.text
-    assert response.headers.get("mcp-session-id")
-    headers["mcp-session-id"] = response.headers["mcp-session-id"]
+    # Stateless HTTP mode (FastMCP stateless_http=True) does not return mcp-session-id.
+    # Carry it forward only if present so this helper works in either transport mode.
+    session_id = response.headers.get("mcp-session-id")
+    if session_id:
+        headers["mcp-session-id"] = session_id
     return headers
 
 

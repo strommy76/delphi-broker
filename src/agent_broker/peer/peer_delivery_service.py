@@ -5,6 +5,7 @@ PATH:        ~/projects/agent-broker/src/agent_broker/peer/peer_delivery_service
 DESCRIPTION: Authority surface for peer send, poll, ack, and thread retrieval semantics.
 
 CHANGELOG:
+2026-05-16 10:42      pi-claude  [Fix] Switch poll() to peer_store.poll_messages_batched: single-transaction batch delivery + audit row. Eliminates N-write-lock-per-poll contention.
 2026-05-06 16:15      Codex      [Fix] Add explicit recipient-authority gate to
                                       non-operator transcript reads.
 2026-05-06 13:31      Codex      [Refactor] Remove unused audit-service dependency and make excluded threads permanently hidden.
@@ -152,29 +153,31 @@ class PeerDeliveryService:
         if participant is None:
             raise RuntimeError("participant resolution returned no participant and no error")
 
-        message_rows = []
         delivered_ts = peer_store.utc_now()
-        for row in peer_store.list_unacked_for_recipient(
+        unacked_rows = peer_store.list_unacked_for_recipient(
             conn,
             participant.participant_id,
             limit=request.limit,
-        ):
-            message_rows.append(
-                peer_store.poll_one_message(
-                    conn,
-                    message_id=row["message_id"],
-                    recipient_participant=participant.participant_id,
-                    delivered_ts=delivered_ts,
-                    event_args={
-                        "event_id": peer_store.new_id(),
-                        "message_id": row["message_id"],
-                        "participant_id": participant.participant_id,
-                        "event_kind": "message_polled",
-                        "event_ts": peer_store.utc_now(),
-                        "detail_json": {"recipient": participant.participant_id},
-                    },
-                )
-            )
+        )
+        message_ids = [row["message_id"] for row in unacked_rows]
+        event_specs = [
+            {
+                "event_id": peer_store.new_id(),
+                "message_id": message_id,
+                "participant_id": participant.participant_id,
+                "event_kind": "message_polled",
+                "event_ts": delivered_ts,
+                "detail_json": {"recipient": participant.participant_id},
+            }
+            for message_id in message_ids
+        ]
+        message_rows = peer_store.poll_messages_batched(
+            conn,
+            recipient_participant=participant.participant_id,
+            message_ids=message_ids,
+            delivered_ts=delivered_ts,
+            event_specs=event_specs,
+        )
         messages = self._messages_from_rows(conn, message_rows)
         return PollResponse(messages=messages, error=None)
 
