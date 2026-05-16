@@ -145,9 +145,10 @@ env_file: ✅ or ❌
 mcp_config: ✅ or ❌
 ```
 
-**STOP HERE.** The operator must collect all secrets, populate
-`config/agents.json` (and optionally `config/agents-secrets.json`) on the broker
-host, and start the broker before you can verify.
+**STOP HERE.** The operator must collect all secrets, populate the matching
+`DELPHI_AGENT_SECRET_<NORMALIZED_AGENT_ID>` entries in the broker host `.env`,
+confirm `config/agents.json` contains the participant identity, and start the
+broker before you can verify.
 
 ---
 
@@ -281,7 +282,7 @@ cd ~/agent-broker  # or wherever the repo is cloned
 test -f .env || { echo "ERROR: .env not found"; exit 1; }
 grep -q '^DELPHI_OPERATOR_TOKEN=' .env || { echo "ERROR: DELPHI_OPERATOR_TOKEN not set in .env"; exit 1; }
 
-# Ensure config/agents.json (and agents-secrets.json if used) is populated
+# Ensure config/agents.json and .env DELPHI_AGENT_SECRET_* entries are populated
 test -f config/agents.json || { echo "ERROR: config/agents.json not found"; exit 1; }
 
 # Create data directory for SQLite persistence

@@ -178,6 +178,14 @@ def require_operator_token() -> str:
             '`python -c "import secrets; print(secrets.token_hex(32))"`'
             " and put it in .env or the process environment."
         )
+    if (
+        OPERATOR_TOKEN.startswith("GENERATE_WITH_")
+        or OPERATOR_TOKEN == "change-me-to-a-random-string"
+    ):
+        raise RuntimeError(
+            "DELPHI_OPERATOR_TOKEN is still a placeholder. Replace it with a "
+            'fresh secret: python -c "import secrets; print(secrets.token_hex(32))"'
+        )
     return OPERATOR_TOKEN
 
 

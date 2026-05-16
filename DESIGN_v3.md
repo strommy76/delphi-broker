@@ -169,7 +169,7 @@ values fail loud; no code path invents runtime defaults.
 | `DELPHI_MCP_ORIGIN_REGISTRY` | fail loud at startup/import | HTTP Origin authority registry |
 | `DELPHI_DB_PATH` | fail loud at startup/import | SQLite SSOT path |
 | `DELPHI_AGENTS_PATH` | fail loud at startup/import | Public agent manifest path |
-| `DELPHI_AGENT_SECRETS_PATH` | fail loud at startup/import | Gitignored HMAC secret sidecar path |
+| `DELPHI_AGENT_SECRET_<NORMALIZED_AGENT_ID>` | fail loud at startup/import | Per-agent HMAC secret sourced from `.env` |
 | `DELPHI_WEB_SECURE` | fail loud at startup/import | Operator session cookie Secure flag |
 | `DELPHI_NUDGE_SWEEP_ENABLED` | fail loud at startup/import | Enables the v2 expired-nudge sweep background process |
 | `DELPHI_MCP_SESSION_MANAGER_ENABLED` | fail loud at startup/import | Enables FastMCP Streamable HTTP session management for `/mcp` |

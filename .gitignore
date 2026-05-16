@@ -10,7 +10,6 @@ venv/
 env/
 .env
 .coverage
-config/agents-secrets.json
 config/operator_permanently_hidden_threads.json
 *.db
 *.db-shm

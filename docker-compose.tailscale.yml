@@ -1,0 +1,5 @@
+services:
+  broker:
+    ports:
+      # Cross-host private-network peers reach broker via the configured interface.
+      - "${BROKER_TAILSCALE_IP}:${DELPHI_PORT}:8420"
