@@ -45,7 +45,6 @@ def test_config_rejects_agent_missing_participant_identity(tmp_path, monkeypatch
         encoding="utf-8",
     )
     monkeypatch.setenv("DELPHI_AGENTS_PATH", str(agents_path))
-    monkeypatch.setenv("DELPHI_AGENT_SECRETS_PATH", str(tmp_path / "agent-secrets.json"))
     monkeypatch.setenv(
         "OPERATOR_PERMANENTLY_HIDDEN_THREADS_PATH", str(permanently_hidden_threads_path)
     )
@@ -99,7 +98,6 @@ def test_config_rejects_invalid_collaboration_governed_flag(tmp_path, monkeypatc
         encoding="utf-8",
     )
     monkeypatch.setenv("DELPHI_AGENTS_PATH", str(agents_path))
-    monkeypatch.setenv("DELPHI_AGENT_SECRETS_PATH", str(tmp_path / "agent-secrets.json"))
     monkeypatch.setenv(
         "OPERATOR_PERMANENTLY_HIDDEN_THREADS_PATH", str(permanently_hidden_threads_path)
     )
@@ -152,7 +150,6 @@ def test_config_rejects_missing_collaboration_governed_flag(tmp_path, monkeypatc
         encoding="utf-8",
     )
     monkeypatch.setenv("DELPHI_AGENTS_PATH", str(agents_path))
-    monkeypatch.setenv("DELPHI_AGENT_SECRETS_PATH", str(tmp_path / "agent-secrets.json"))
     monkeypatch.setenv(
         "OPERATOR_PERMANENTLY_HIDDEN_THREADS_PATH", str(permanently_hidden_threads_path)
     )

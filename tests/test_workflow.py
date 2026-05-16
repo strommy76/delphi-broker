@@ -132,7 +132,6 @@ def wf_layer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple]
         encoding="utf-8",
     )
     monkeypatch.setenv("DELPHI_AGENTS_PATH", str(agents_path))
-    monkeypatch.setenv("DELPHI_AGENT_SECRETS_PATH", str(tmp_path / "agent-secrets.json"))
     monkeypatch.setenv(
         "OPERATOR_PERMANENTLY_HIDDEN_THREADS_PATH", str(permanently_hidden_threads_path)
     )

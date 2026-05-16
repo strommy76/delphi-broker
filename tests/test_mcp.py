@@ -110,7 +110,6 @@ def _mcp_http_stack(tmp_path, monkeypatch):
     permanently_hidden_threads_path = tmp_path / "operator_permanently_hidden_threads.json"
     _write_permanently_hidden_threads(permanently_hidden_threads_path)
     monkeypatch.setenv("DELPHI_AGENTS_PATH", str(agents_path))
-    monkeypatch.setenv("DELPHI_AGENT_SECRETS_PATH", str(tmp_path / "agent-secrets.json"))
     monkeypatch.setenv(
         "OPERATOR_PERMANENTLY_HIDDEN_THREADS_PATH", str(permanently_hidden_threads_path)
     )
@@ -211,7 +210,6 @@ def _mcp_peer_http_stack(tmp_path, monkeypatch):
     permanently_hidden_threads_path = tmp_path / "operator_permanently_hidden_threads.json"
     _write_permanently_hidden_threads(permanently_hidden_threads_path)
     monkeypatch.setenv("DELPHI_AGENTS_PATH", str(agents_path))
-    monkeypatch.setenv("DELPHI_AGENT_SECRETS_PATH", str(tmp_path / "agent-secrets.json"))
     monkeypatch.setenv(
         "OPERATOR_PERMANENTLY_HIDDEN_THREADS_PATH", str(permanently_hidden_threads_path)
     )

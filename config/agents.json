@@ -1,0 +1,59 @@
+{
+  "$schema": "Seed agent registry. Agents listed here are auto-registered on startup. Per-agent HMAC secrets are sourced from .env (DELPHI_AGENT_SECRET_<NORMALIZED_AGENT_ID>), not from this file.",
+  "agents": [
+    {
+      "agent_id": "dev-codex",
+      "host": "desktop-vc94kou",
+      "role": "executor",
+      "participant_type": "agent",
+      "transport_type": "mcp",
+      "is_probe": false,
+      "collaboration_governed": true
+    },
+    {
+      "agent_id": "dev-claude",
+      "host": "desktop-vc94kou",
+      "role": "worker",
+      "participant_type": "agent",
+      "transport_type": "mcp",
+      "is_probe": false,
+      "collaboration_governed": true
+    },
+    {
+      "agent_id": "prod-codex",
+      "host": "bsalien",
+      "role": "worker",
+      "participant_type": "agent",
+      "transport_type": "mcp",
+      "is_probe": false,
+      "collaboration_governed": true
+    },
+    {
+      "agent_id": "prod-claude",
+      "host": "bsalien",
+      "role": "worker",
+      "participant_type": "agent",
+      "transport_type": "mcp",
+      "is_probe": false,
+      "collaboration_governed": true
+    },
+    {
+      "agent_id": "bsflow-claude",
+      "host": "bsflow",
+      "role": "arbitrator",
+      "participant_type": "agent",
+      "transport_type": "mcp",
+      "is_probe": false,
+      "collaboration_governed": false
+    },
+    {
+      "agent_id": "pi-codex",
+      "host": "pi",
+      "role": "worker",
+      "participant_type": "agent",
+      "transport_type": "mcp",
+      "is_probe": false,
+      "collaboration_governed": false
+    }
+  ]
+}

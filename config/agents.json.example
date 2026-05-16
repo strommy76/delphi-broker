@@ -1,5 +1,5 @@
 {
-  "$schema": "Seed agent registry. Agents listed here are auto-registered on startup.",
+  "$schema": "Seed agent registry. Agents listed here are auto-registered on startup. Per-agent HMAC secrets are sourced from .env (DELPHI_AGENT_SECRET_<NORMALIZED_AGENT_ID>), not from this file.",
   "agents": [
     {
       "agent_id": "prod-claude",
@@ -8,7 +8,6 @@
       "participant_type": "agent",
       "transport_type": "mcp",
       "collaboration_governed": true,
-      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\"",
       "is_probe": false
     },
     {
@@ -18,7 +17,6 @@
       "participant_type": "agent",
       "transport_type": "mcp",
       "collaboration_governed": true,
-      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\"",
       "is_probe": false
     },
     {
@@ -28,7 +26,6 @@
       "participant_type": "agent",
       "transport_type": "mcp",
       "collaboration_governed": true,
-      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\"",
       "is_probe": false
     },
     {
@@ -38,7 +35,6 @@
       "participant_type": "agent",
       "transport_type": "mcp",
       "collaboration_governed": true,
-      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\"",
       "is_probe": false
     },
     {
@@ -48,7 +44,6 @@
       "participant_type": "agent",
       "transport_type": "mcp",
       "collaboration_governed": true,
-      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\"",
       "is_probe": false
     },
     {
@@ -58,8 +53,7 @@
       "participant_type": "operator",
       "transport_type": "http",
       "collaboration_governed": false,
-      "is_probe": false,
-      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
+      "is_probe": false
     },
     {
       "agent_id": "pi-claude-probe",
@@ -68,8 +62,7 @@
       "participant_type": "agent",
       "transport_type": "http",
       "collaboration_governed": false,
-      "is_probe": true,
-      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
+      "is_probe": true
     },
     {
       "agent_id": "pi-codex-probe",
@@ -78,8 +71,7 @@
       "participant_type": "agent",
       "transport_type": "http",
       "collaboration_governed": false,
-      "is_probe": true,
-      "secret": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
+      "is_probe": true
     }
   ]
 }

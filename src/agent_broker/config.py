@@ -5,6 +5,7 @@ PATH:        ~/projects/agent-broker/src/agent_broker/config.py
 DESCRIPTION: Fail-loud configuration loader for broker runtime, MCP transport, and agent registry settings.
 
 CHANGELOG:
+2026-05-16 12:20      Claude     [Refactor] Move per-agent HMAC secrets from inline/sidecar JSON to .env per the env-SSOT doctrine. agents.json carries structural fields only; secrets come from DELPHI_AGENT_SECRET_<NORMALIZED_AGENT_ID>. Inline `secret` retained as back-compat for test fixtures.
 2026-05-06 14:00      Codex      [Refactor] Rename operator permanently hidden thread path env-var for semantic consistency.
 2026-05-06 13:37      Codex      [Refactor] Rename operator hidden-thread constant for permanent read-side exclusion semantics.
 2026-05-06 12:52      Codex      [Feature] Add operator participant authority and operator transcript exclusion config.
@@ -17,8 +18,10 @@ Single import point for all configuration.
 
 Infrastructure values come from the environment (or `.env` if present); the
 agent registry is loaded from `config/agents.json`. Per-agent HMAC secrets
-may also be split out into `config/agents-secrets.json` (gitignored) so the
-public agent manifest can be checked into VCS without leaking secrets.
+are sourced from `.env` via convention `DELPHI_AGENT_SECRET_<NORMALIZED_AGENT_ID>`
+(uppercase, `-` replaced with `_`). The agent registry carries structural
+fields only and is committed; secrets stay in `.env` (gitignored). Inline
+`secret` on an agent record is retained as back-compat for test fixtures.
 
 Fail-loud on any missing or invalid configuration. Silent fallbacks are
 forbidden by project policy.
@@ -197,9 +200,11 @@ SEED_AGENTS: list[dict] = _agents_data.get("agents", [])
 
 _VALID_ROLES = {"worker", "arbitrator", "executor", "operator"}
 
-# Validate seed agents fail-loud and build the HMAC secret lookup. Secrets may
-# come from the agents.json entry directly (tests + back-compat) or from a
-# sidecar `config/agents-secrets.json` file (preferred for production).
+# Validate seed agents fail-loud and build the HMAC secret lookup. Secrets
+# come from `.env` (DELPHI_AGENT_SECRET_<NORMALIZED_AGENT_ID>) per the
+# env-SSOT doctrine. An inline `secret` field on an agent record is honored
+# as back-compat for test fixtures, but production agents.json carries
+# structural fields only.
 AGENT_SECRETS: dict[str, str] = {}
 for _agent in SEED_AGENTS:
     _agent_id = _agent.get("agent_id")
@@ -241,35 +246,36 @@ for _agent in SEED_AGENTS:
             f"Agent '{_agent_id}' has invalid collaboration_governed "
             f"{_collaboration_governed!r} in {_agents_file}; expected true or false"
         )
-    _secret = (_agent.get("secret") or "").strip()
-    if _secret and not _secret.startswith("GENERATE_WITH"):
-        AGENT_SECRETS[_agent_id] = _secret
+    # Inline `secret` field is back-compat for test fixtures only. Production
+    # agents.json must not carry secrets; .env is the SSOT per the env-SSOT
+    # doctrine. Inline values that look like the GENERATE_WITH placeholder are
+    # treated as not-yet-generated.
+    _inline_secret = (_agent.get("secret") or "").strip()
+    if _inline_secret and not _inline_secret.startswith("GENERATE_WITH"):
+        AGENT_SECRETS[_agent_id] = _inline_secret
 
-# Optional sidecar: config/agents-secrets.json (gitignored) overrides inline.
-_secrets_path_raw = _require_env("DELPHI_AGENT_SECRETS_PATH")
-_secrets_file = (
-    Path(_secrets_path_raw)
-    if Path(_secrets_path_raw).is_absolute()
-    else _PROJECT_ROOT / _secrets_path_raw
-)
-if _secrets_file.exists():
-    _secrets_data = json.loads(_secrets_file.read_text())
-    if not isinstance(_secrets_data, dict):
-        raise ValueError(
-            f"{_secrets_file}: top-level must be a JSON object of {{agent_id: hex_secret}}"
-        )
-    for _agent_id, _secret_value in _secrets_data.items():
-        if not isinstance(_secret_value, str) or not _secret_value.strip():
-            raise ValueError(f"{_secrets_file}: agent '{_agent_id}' has empty/invalid secret")
-        AGENT_SECRETS[_agent_id] = _secret_value.strip()
+# Per-agent HMAC secrets sourced from .env per the env-SSOT doctrine.
+# Convention: DELPHI_AGENT_SECRET_<agent_id_normalized>, where normalization
+# uppercases the agent_id and replaces `-` with `_`. An env-var value
+# overrides an inline back-compat value if both are present.
+def _agent_secret_env_var(agent_id: str) -> str:
+    return "DELPHI_AGENT_SECRET_" + agent_id.upper().replace("-", "_")
+
+
+for _agent in SEED_AGENTS:
+    _agent_id = _agent["agent_id"]
+    _env_secret = os.environ.get(_agent_secret_env_var(_agent_id), "").strip()
+    if _env_secret:
+        AGENT_SECRETS[_agent_id] = _env_secret
 
 # Final validation: every seed agent must have a usable secret somewhere.
 for _agent in SEED_AGENTS:
     _agent_id = _agent["agent_id"]
     if _agent_id not in AGENT_SECRETS:
         raise ValueError(
-            f"Agent '{_agent_id}' has no valid secret. Either inline `secret` in "
-            f"{_agents_file} or add an entry in {_secrets_file}. "
+            f"Agent '{_agent_id}' has no valid secret. Set environment variable "
+            f"{_agent_secret_env_var(_agent_id)} in .env (preferred), or for "
+            f"test fixtures inline `secret` in the agents.json entry. "
             'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
         )
 
